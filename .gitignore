@@ -7,3 +7,4 @@ data/
 *.ply
 *.txt
 .DS_Store
+cache/

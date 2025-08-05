@@ -1,140 +1,167 @@
 # Structure from Motion 
 
-Structure from Motion (SFM) from scratch, using Numpy and OpenCV. 
+Structure from Motion (SFM) from scratch, using Numpy and OpenCV with **iPhone media support**.
 
 ![](results/misc-figs/fountain_p11.png)
 
-In this repository, we provide
-* Self-reliant tutorial on SFM
-* SFM Python Script
-* Associated Booklet
+This repository provides:
+* **Complete SFM Pipeline** with iPhone HEIC/MOV support
+* **Automatic Camera Calibration** from HEIC metadata
+* **Unified Media Processing** (HEIC→JPG, MOV→MP4→frames)
+* Self-reliant SFM tutorials
+* Interactive 3D visualization
 
-## 1. Getting Started
+## 🚀 Quick Start (iPhone Media)
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+### 1. Setup
+```bash
+# Install dependencies
+pip install opencv-python numpy matplotlib pillow-heif
 
-### 1.1. Prerequisites
-
-To run tutorials, you need to have following libraries installed:
-```
-Numpy >= 1.13.1
-OpenCV 3
-Meshlab
-```
-Furthermore, to run SFM python script, you also need: 
-```
-OpenCV Contrib
+# Create dataset structure
+python setup_dataset.py --dataset my_project
 ```
 
-### 1.2. Data 
-Please download the standard data benchmarks from [here](https://github.com/openMVG/SfM_quality_evaluation)
-
-After downloading, you should have the following directory structure 
+### 2. Add Your iPhone Media
+Copy your iPhone photos/videos to `data/my_project/media/`:
 ```
 data/
-    fountain-P11/ 
-        images/
-            0001.jpg
-            ...
-            0011.jpg
-        gt_dense_cameras/
-            0000.jpg.camera
-            ...
-            0011.jpg.camera
-    Herz-Jesus-P8/
-        ...
-    Castle-P19/
-        ...
-    ...
+  my_project/
+    media/           # 📁 PUT YOUR FILES HERE
+      IMG_1234.MOV   # iPhone videos
+      IMG_1235.HEIC  # iPhone photos
+      ...
 ```
 
-## 2. Demo/Quick Start
+### 3. Run Complete Pipeline
+```bash
+# Process media + run SFM + create 3D visualization
+python script/pipeline.py --dataset my_project --visualize-3d
+```
 
-### 2.1. Tutorial Notebook 
-Tutorials are in `tutorial/` directory. Furthermore, they're divided in following sections
+That's it! The pipeline automatically:
+- ✅ Converts HEIC→JPG with camera calibration extraction
+- ✅ Converts MOV→MP4 and extracts optimal frames
+- ✅ Runs feature matching and SFM reconstruction
+- ✅ Creates interactive 3D point cloud visualization
+
+## 📱 iPhone Camera Setup
+
+For optimal results, use proper iPhone camera settings:
+```bash
+python script/media_manager.py --instructions
+```
+
+**Key Settings:**
+- Use main camera (1x lens, NOT ultra-wide)
+- Lock focus/exposure: Tap & HOLD until "AE/AF LOCK" appears
+- Record in 4K/1080p at 30fps
+- Move SLOWLY with 60-80% overlap between frames
+
+## 📁 Directory Structure
+
+The pipeline uses a clean, organized structure:
+```
+data/
+  my_project/              # Your dataset name
+    media/                 # 📁 Raw iPhone files (.HEIC, .MOV)
+    images/                # ✅ Auto-generated processed images
+    videos/                # ✅ Auto-generated converted videos
+    features/              # ✅ Auto-generated feature files
+    matches/               # ✅ Auto-generated match files
+
+results/
+  my_project/              # SFM reconstruction results
+    point-clouds/          # 3D point cloud files (.ply)
+    errors/                # Reprojection error plots
+
+script/
+  calibrations/            # Camera calibration files
+```
+
+## 🛠️ Advanced Usage
+
+### Custom Media Directory
+```bash
+# Process media from custom location
+python script/pipeline.py --media-dir /path/to/iphone/export --dataset my_project
+```
+
+### Video Frame Extraction Settings
+```bash
+# Extract more frames with higher quality threshold
+python script/pipeline.py --frame-interval 5 --max-frames 100 --quality-threshold 75
+```
+
+### Individual Components
+```bash
+# Process media only
+python script/media_manager.py /path/to/media --dataset my_project
+
+# Run SFM on existing processed images
+python script/pipeline.py --dataset my_project --visualize-3d
+
+# Clean and restart
+python script/pipeline.py --dataset my_project --clean --visualize-3d
+```
+
+## 📚 Tutorials
+
+Detailed tutorials are in the `tutorial/` directory:
 1. Chapter 1: Prerequisites
-2. Chapter 2: Epipolar Geometry
+2. Chapter 2: Epipolar Geometry  
 3. Chapter 3: 3D Scene Estimations
-4. Chapter 4: Putting It Together: Part I
+4. Chapter 4: Putting It Together
 
-### 2.2. SFM Script
-1. Go to `script/` directory
-    ```
-    cd script
-    ```
+## 🔧 Prerequisites
 
-2. Run `featmatch.py` to generate feature keypoints, descriptors and matches
-    ```
-    python featmatch.py
-    ```
+**Required:**
+```bash
+pip install opencv-python numpy matplotlib
+```
 
-    All arguments are shown below: 
-    ```
-    usage: featmatch.py [-h] [--data_dir DATA_DIR] [--ext EXT] [--out_dir OUT_DIR]
-                        [--features FEATURES] [--print_every PRINT_EVERY]
-                        [--save_results SAVE_RESULTS]
+**For HEIC support (recommended):**
+```bash
+pip install pillow-heif
+# OR on macOS: uses built-in 'sips' command
+```
 
-    optional arguments:
-    -h, --help            show this help message and exit
+**For MOV conversion:**
+```bash
+# Install ffmpeg
+brew install ffmpeg  # macOS
+# or apt install ffmpeg  # Linux
+```
 
-    --data_dir  directory containing images (default: ../data/fountain-P11/images/)
-    --ext   comma seperated string of allowed image extensions (default: jpg,png)
-    --out_dir   root directory to store results in (default: ../data/fountain-P11)
+## 📊 Results
 
-    --features  [SIFT|SURF] Feature algorithm to use (default: SURF)
-    --matcher   [BFMatcher|FlannBasedMatcher] Matching algorithm to use (default: BFMatcher)
-    --cross_check   [True|False] Whether to cross check feature matching or not (default: True)
+The pipeline generates:
+- **3D Point Clouds** (.ply files) viewable in MeshLab
+- **Interactive 3D Visualization** (matplotlib)
+- **Reprojection Error Analysis**
+- **Camera Pose Estimation**
 
-    --print_every   [1,+inf] print progress every print_every seconds, -1 to disable (default: 1)
-    --save_results  [True|False] whether to save images with keypoints drawn on them (default: False)
-    ```
-
-3. Run `sfm.py` to generate point cloud: 
-    ```
-    python sfm.py --data-dir <path-to-data-directory>
-    ```
-
-    All arguments are shown below
-    ```
-    usage: sfm.py [-h] [--data_dir DATA_DIR] [--dataset DATASET] [--ext EXT]
-              [--out_dir OUT_DIR] [--features FEATURES] [--matcher MATCHER]
-              [--cross_check CROSS_CHECK] [--calibration_mat CALIBRATION_MAT]
-              [--fund_method FUND_METHOD] [--outlier_thres OUTLIER_THRES]
-              [--fund_prob FUND_PROB] [--pnp_method PNP_METHOD]
-              [--pnp_prob PNP_PROB] [--allow_duplicates ALLOW_DUPLICATES]
-              [--color_policy COLOR_POLICY] [--plot_error PLOT_ERROR]
-              [--verbose VERBOSE]
-
-    optional arguments:
-    -h, --help            show this help message and exit
-    
-    --data_dir  root directory containing input data (default: ../data/)
-    --dataset   name of dataset (default: fountain-P11)
-    --ext   comma seperated string of allowed image extensions (default: jpg,png)
-    --out_dir   root directory to store results in (default: ../results/)
-
-    --features  [SIFT|SURF] Feature algorithm to use (default: SURF)
-    --matcher   [BFMatcher|FlannBasedMatcher] Matching algorithm to use (default: BFMatcher)
-    --calibration_mat   [benchmark|lg_g3] Type of intrinsic camera to use (default: benchmark)
-    
-    --fund_method   [FM_RANSAC | FM_8POINT] Method to estimate fundamental matrix (default: FM_RANSAC)
-    --outlier_thres     Threshold value of outlier to be used in fundamental matrix estimation (default: 0.9)
-    --fund_prob     [0, 1] Confidence in fundamental matrix estimation required(default: 0.9)
-
-    --pnp_method    [SOLVEPNP_DLS | SOLVEPNP_EPNP | ...] Method used for PnP estimation (default: SOLVEPNP_DLS)
-    --pnp_prob  [0, 1] Confidence in PnP estimation required (default: 0.99)
-    ```
-
-## 3. Results
-### 3.1. Fountain P11
+### Sample Results
 ![](results/misc-figs/fountain_p11.png)
+*Fountain P11 reconstruction*
 
-### 3.2. Herz Jesus P8
 ![](results/misc-figs/herz_jesus_p8.png)
+*Herz Jesus P8 reconstruction*
 
-### 3.3. Entry P10
 ![](results/misc-figs/entry_p10.png)
+*Entry P10 reconstruction*
 
-## Authors
+## 🎯 Key Features
+
+- **📱 iPhone Native Support**: Direct HEIC/MOV processing
+- **🔧 Automatic Calibration**: Extracts camera parameters from HEIC metadata
+- **🎬 Smart Frame Extraction**: Blur detection and optimal frame spacing
+- **🚀 One-Command Pipeline**: From raw media to 3D reconstruction
+- **📊 Interactive Visualization**: 3D point cloud viewer
+- **🧹 Clean Architecture**: Organized directory structure
+
+## 🤝 Authors
 * [Muneeb Aadil](https://muneebaadil.github.io)
 * [Sibt ul Hussain](https://sites.google.com/site/sibtulhussain/)
+
+*Enhanced with iPhone media support and unified pipeline*

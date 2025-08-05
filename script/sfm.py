@@ -48,22 +48,22 @@ class SFM(object):
         self.image_data, self.matches_data, errors = {}, {}, {}
         self.matcher = getattr(cv2, opts.matcher)(crossCheck=opts.cross_check)
 
-        # Load calibration from HEIC-generated file (ground truth from image metadata)
+        # Load calibration from dataset-specific file
         import json
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        calib_path = os.path.join(script_dir, 'calibrations', 'latest_calibration.json')
+        calib_path = os.path.join(script_dir, 'calibrations', f'{opts.dataset}_calibration.json')
         
         if os.path.exists(calib_path):
             with open(calib_path, 'r') as f:
                 calib_data = json.load(f)
             self.K = np.array(calib_data['camera_matrix'])
-            print(f'Using camera calibration from HEIC metadata:')
+            print(f'Using camera calibration for {opts.dataset}:')
+            print(f'  Resolution: {calib_data["image_size"]}')
             print(f'  fx: {self.K[0,0]:.1f}, fy: {self.K[1,1]:.1f}')
             print(f'  cx: {self.K[0,2]:.1f}, cy: {self.K[1,2]:.1f}')
-            print(f'  Image size: {calib_data["image_size"]}')
         else:
             # Fallback: estimate from first image
-            print('No HEIC calibration found. Using image-based estimation...')
+            print('No calibration found. Using image-based estimation...')
             img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.jpg'))
             if img_sample is None:
                 img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.png'))
