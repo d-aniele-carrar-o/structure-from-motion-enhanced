@@ -1,6 +1,7 @@
 # Data directories
 data/
 results/
+cache/
 
 # Python
 __pycache__/
