@@ -7,7 +7,7 @@ from time import time
 import matplotlib.pyplot as plt
 
 from utils import * 
-import pdb 
+
 
 class Camera(object): 
     def __init__(self, R, t, ref): 
@@ -28,7 +28,7 @@ class SFM(object):
         self.point_cloud = np.zeros((0,3))
 
         #setting up directory stuff..
-        self.images_dir = os.path.join(opts.data_dir,opts.dataset, 'images')
+        self.images_dir = os.path.join(opts.data_dir, opts.dataset, 'images')
         self.feat_dir = os.path.join(opts.data_dir, opts.dataset, 'features', opts.features)
         self.matches_dir = os.path.join(opts.data_dir, opts.dataset, 'matches', opts.matcher)
         self.out_cloud_dir = os.path.join(opts.out_dir, opts.dataset, 'point-clouds')
@@ -42,32 +42,49 @@ class SFM(object):
             os.makedirs(self.out_err_dir)
 
         self.image_names = [x.split('.')[0] for x in sorted(os.listdir(self.images_dir)) \
-                            if x.split('.')[-1] in opts.ext]
+                            if x.split('.')[-1].lower() in opts.ext]
 
         #setting up shared parameters for the pipeline
         self.image_data, self.matches_data, errors = {}, {}, {}
         self.matcher = getattr(cv2, opts.matcher)(crossCheck=opts.cross_check)
 
-        if opts.calibration_mat == 'benchmark': 
-            self.K = np.array([[2759.48,0,1520.69],[0,2764.16,1006.81],[0,0,1]])
-        elif opts.calibration_mat == 'lg_g3': 
-            self.K = np.array([[3.97*320, 0, 320],[0, 3.97*320, 240],[0,0,1]])
-        else: 
-            raise NotImplementedError
+        # Load calibration from HEIC-generated file (ground truth from image metadata)
+        import json
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        calib_path = os.path.join(script_dir, 'calibrations', 'latest_calibration.json')
+        
+        if os.path.exists(calib_path):
+            with open(calib_path, 'r') as f:
+                calib_data = json.load(f)
+            self.K = np.array(calib_data['camera_matrix'])
+            print(f'Using camera calibration from HEIC metadata:')
+            print(f'  fx: {self.K[0,0]:.1f}, fy: {self.K[1,1]:.1f}')
+            print(f'  cx: {self.K[0,2]:.1f}, cy: {self.K[1,2]:.1f}')
+            print(f'  Image size: {calib_data["image_size"]}')
+        else:
+            # Fallback: estimate from first image
+            print('No HEIC calibration found. Using image-based estimation...')
+            img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.jpg'))
+            if img_sample is None:
+                img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.png'))
+            h, w = img_sample.shape[:2]
+            f = max(w, h)  # Rough estimate
+            self.K = np.array([[f, 0, w/2], [0, f, h/2], [0, 0, 1]])
+            print(f'Using estimated calibration for {w}x{h} images: f={f}')
         
     def _LoadFeatures(self, name): 
-        with open(os.path.join(self.feat_dir,'kp_{}.pkl'.format(name)),'r') as f: 
+        with open(os.path.join(self.feat_dir,'kp_{}.pkl'.format(name)),'rb') as f: 
             kp = pickle.load(f)
         kp = DeserializeKeypoints(kp)
 
-        with open(os.path.join(self.feat_dir,'desc_{}.pkl'.format(name)),'r') as f: 
+        with open(os.path.join(self.feat_dir,'desc_{}.pkl'.format(name)),'rb') as f: 
             desc = pickle.load(f)
 
         return kp, desc 
 
     def _LoadMatches(self, name1, name2): 
         with open(os.path.join(self.matches_dir,'match_{}_{}.pkl'.format(name1,name2))
-                    ,'r') as f: 
+                    ,'rb') as f: 
             matches = pickle.load(f)
         matches = DeserializeMatches(matches)
         return matches
@@ -97,9 +114,11 @@ class SFM(object):
         img1pts, img2pts, img1idx, img2idx = self._GetAlignedMatches(kp1,desc1,kp2,
                                                                     desc2,matches)
         
-        F,mask = cv2.findFundamentalMat(img1pts,img2pts,method=opts.fund_method,
-                                        param1=opts.outlier_thres,param2=opts.fund_prob)
+        print(f'  Initial matches: {len(img1pts)}')
+        F,mask = cv2.findFundamentalMat(img1pts,img2pts,method=self.opts.fund_method,
+                                        ransacReprojThreshold=self.opts.outlier_thres,confidence=self.opts.fund_prob)
         mask = mask.astype(bool).flatten()
+        print(f'  After fundamental matrix filtering: {np.sum(mask)} matches')
 
         E = self.K.T.dot(F.dot(self.K))
         _,R,t,_ = cv2.recoverPose(E,img1pts[mask],img2pts[mask],self.K)
@@ -109,6 +128,7 @@ class SFM(object):
 
         self.matches_data[(name1,name2)] = [matches, img1pts[mask], img2pts[mask], 
                                             img1idx[mask],img2idx[mask]]
+        print(f'  Final inlier matches for triangulation: {len(img1pts[mask])}')
 
         return R,t
 
@@ -143,10 +163,22 @@ class SFM(object):
         _, img1pts, img2pts, img1idx, img2idx = self.matches_data[(name1,name2)]
         
         new_point_cloud = __TriangulateTwoViews(img1pts, img2pts, R1, t1, R2, t2)
+        
+        # Filter out points that are too far from cameras (likely outliers)
+        valid_mask = np.all(np.abs(new_point_cloud) < 100, axis=1)  # Remove extreme points
+        new_point_cloud = new_point_cloud[valid_mask]
+        
+        print(f'  Triangulated {len(new_point_cloud)} valid 3D points')
         self.point_cloud = np.concatenate((self.point_cloud, new_point_cloud), axis=0)
+        print(f'  Total 3D points: {len(self.point_cloud)}')
 
-        ref1, ref2 = _Update3DReference(ref1, ref2, img1idx, img2idx,new_point_cloud.shape[0],
-                                        self.point_cloud.shape[0]-new_point_cloud.shape[0])
+        # Update references only for valid points
+        if len(new_point_cloud) > 0:
+            ref1, ref2 = _Update3DReference(ref1, ref2, img1idx[valid_mask], img2idx[valid_mask],
+                                            new_point_cloud.shape[0],
+                                            self.point_cloud.shape[0]-new_point_cloud.shape[0])
+        else:
+            print('  Warning: No valid 3D points after filtering')
         self.image_data[name1][-1] = ref1 
         self.image_data[name2][-1] = ref2 
 
@@ -167,9 +199,9 @@ class SFM(object):
                     img1pts, img2pts, img1idx, img2idx = self._GetAlignedMatches(kp1,desc1,kp2,
                                                                                 desc2,matches)
                     
-                    F,mask = cv2.findFundamentalMat(img1pts,img2pts,method=opts.fund_method,
-                                                    param1=opts.outlier_thres,
-                                                    param2=opts.fund_prob)
+                    F,mask = cv2.findFundamentalMat(img1pts,img2pts,method=self.opts.fund_method,
+                                                    ransacReprojThreshold=self.opts.outlier_thres,
+                                                    confidence=self.opts.fund_prob)
                     mask = mask.astype(bool).flatten()
 
                     self.matches_data[(prev_name,name)] = [matches, img1pts[mask], img2pts[mask], 
@@ -177,13 +209,13 @@ class SFM(object):
                     self._TriangulateTwoViews(prev_name, name)
 
                 else: 
-                    print 'skipping {} and {}'.format(prev_name, name)
+                    print('skipping {} and {}'.format(prev_name, name))
         
     def _NewViewPoseEstimation(self, name): 
         
         def _Find2D3DMatches(): 
             
-            matcher_temp = getattr(cv2, opts.matcher)()
+            matcher_temp = getattr(cv2, self.opts.matcher)()
             kps, descs = [], []
             for n in self.image_names: 
                 if n in self.image_data.keys():
@@ -258,7 +290,19 @@ class SFM(object):
                 kp = np.array(kp)[ref>=0]
                 image_pts = np.array([_kp.pt for _kp in kp])
 
-                image = cv2.imread(os.path.join(self.images_dir, k+'.jpg'))[:,:,::-1]
+                # Find the correct image file extension
+                image_path = None
+                for ext in self.opts.ext:
+                    potential_path = os.path.join(self.images_dir, k+'.'+ext)
+                    if os.path.exists(potential_path):
+                        image_path = potential_path
+                        break
+                
+                if image_path is None:
+                    print(f"Warning: Could not find image file for {k}")
+                    continue
+                    
+                image = cv2.imread(image_path)[:,:,::-1]
 
                 colors[ref[ref>=0].astype(int)] = image[image_pts[:,1].astype(int),
                                                         image_pts[:,0].astype(int)]
@@ -267,6 +311,63 @@ class SFM(object):
 
         colors = _GetColors()
         pts2ply(self.point_cloud, colors, filename)
+        
+    def Visualize3D(self):
+        """Create interactive 3D visualization of the point cloud"""
+        try:
+            from mpl_toolkits.mplot3d import Axes3D
+            
+            def _GetColors(): 
+                colors = np.zeros_like(self.point_cloud)
+                
+                for k in self.image_data.keys(): 
+                    _, _, ref = self.image_data[k]
+                    kp, desc = self._LoadFeatures(k)
+                    kp = np.array(kp)[ref>=0]
+                    image_pts = np.array([_kp.pt for _kp in kp])
+
+                    # Find the correct image file extension
+                    image_path = None
+                    for ext in self.opts.ext:
+                        potential_path = os.path.join(self.images_dir, k+'.'+ext)
+                        if os.path.exists(potential_path):
+                            image_path = potential_path
+                            break
+                    
+                    if image_path is None:
+                        continue
+                        
+                    image = cv2.imread(image_path)[:,:,::-1]
+                    colors[ref[ref>=0].astype(int)] = image[image_pts[:,1].astype(int),
+                                                            image_pts[:,0].astype(int)]
+                
+                return colors / 255.0  # Normalize for matplotlib
+            
+            colors = _GetColors()
+            
+            fig = plt.figure(figsize=(12, 8))
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # Plot points
+            ax.scatter(self.point_cloud[:, 0], self.point_cloud[:, 1], self.point_cloud[:, 2], 
+                      c=colors, s=1, alpha=0.6)
+            
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.set_title('3D Point Cloud Reconstruction')
+            
+            plt.tight_layout()
+            
+            # Save the visualization
+            vis_path = os.path.join(self.out_cloud_dir, '3d_visualization.png')
+            plt.savefig(vis_path, dpi=150, bbox_inches='tight')
+            print(f'3D visualization saved to: {vis_path}')
+            
+            plt.show()
+            
+        except ImportError:
+            print("Matplotlib not available for 3D visualization")
 
     def _ComputeReprojectionError(self, name): 
         
@@ -305,15 +406,15 @@ class SFM(object):
         t2 = time()
         this_time = t2-t1
         total_time += this_time
-        print 'Baseline Cameras {0}, {1}: Pose Estimation [time={2:.3}s]'.format(name1, name2,
-                                                                                 this_time)
+        print('Baseline Cameras {0}, {1}: Pose Estimation [time={2:.3}s]'.format(name1, name2,
+                                                                                 this_time))
 
         self._TriangulateTwoViews(name1, name2)
         t1 = time()
         this_time = t1-t2
         total_time += this_time
-        print 'Baseline Cameras {0}, {1}: Baseline Triangulation [time={2:.3}s]'.format(name1, 
-                                                                                name2, this_time)
+        print('Baseline Cameras {0}, {1}: Baseline Triangulation [time={2:.3}s]'.format(name1, 
+                                                                                name2, this_time))
 
         views_done = 2 
 
@@ -325,8 +426,8 @@ class SFM(object):
         errors.append(err1)
         errors.append(err2)
 
-        print 'Camera {}: Reprojection Error = {}'.format(name1, err1)
-        print 'Camera {}: Reprojection Error = {}'.format(name2, err2)
+        print('Camera {}: Reprojection Error = {}'.format(name1, err1))
+        print('Camera {}: Reprojection Error = {}'.format(name2, err2))
 
         for new_name in self.image_names[2:]: 
 
@@ -336,14 +437,14 @@ class SFM(object):
             t2 = time()
             this_time = t2-t1
             total_time += this_time
-            print 'Camera {0}: Pose Estimation [time={1:.3}s]'.format(new_name, this_time)
+            print('Camera {0}: Pose Estimation [time={1:.3}s]'.format(new_name, this_time))
 
             #triangulation for new registered camera
             self._TriangulateNewView(new_name)
             t1 = time()
             this_time = t1-t2
             total_time += this_time
-            print 'Camera {0}: Triangulation [time={1:.3}s]'.format(new_name, this_time)
+            print('Camera {0}: Triangulation [time={1:.3}s]'.format(new_name, this_time))
 
             #3d point cloud update and error for new camera
             views_done += 1 
@@ -351,61 +452,68 @@ class SFM(object):
 
             new_err = self._ComputeReprojectionError(new_name)
             errors.append(new_err)
-            print 'Camera {}: Reprojection Error = {}'.format(new_name, new_err)
+            print('Camera {}: Reprojection Error = {}'.format(new_name, new_err))
 
         mean_error = sum(errors) / float(len(errors))
-        print 'Reconstruction Completed: Mean Reprojection Error = {2} [t={0:.6}s], \
-                Results stored in {1}'.format(total_time, self.opts.out_dir, mean_error)
+        print('Reconstruction Completed:')
+        print(f'  Point Cloud: {len(self.point_cloud)} 3D points')
+        print(f'  Mean Reprojection Error: {mean_error:.2f} pixels')
+        print(f'  Total Time: {total_time:.2f}s')
+        print(f'  Results stored in: {self.opts.out_dir}')
+        
+        # Create 3D visualization if requested
+        if self.opts.visualize_3d:
+            print('\nCreating 3D visualization...')
+            self.Visualize3D()
         
 
 def SetArguments(parser): 
 
     #directory stuff
-    parser.add_argument('--data_dir',action='store',type=str,default='../data/',dest='data_dir',
+    parser.add_argument('--data-dir',action='store',type=str,default='../data/',dest='data_dir',
                         help='root directory containing input data (default: ../data/)') 
-    parser.add_argument('--dataset',action='store',type=str,default='fountain-P11',dest='dataset',
-                        help='name of dataset (default: fountain-P11)') 
+    parser.add_argument('--dataset',action='store',type=str,default='custom',dest='dataset',
+                        help='name of dataset (default: custom)') 
     parser.add_argument('--ext',action='store',type=str,default='jpg,png',dest='ext', 
                         help='comma seperated string of allowed image extensions \
                         (default: jpg,png)') 
-    parser.add_argument('--out_dir',action='store',type=str,default='../results/',dest='out_dir',
+    parser.add_argument('--out-dir',action='store',type=str,default='../results/',dest='out_dir',
                         help='root directory to store results in (default: ../results/)') 
 
     #matching parameters
-    parser.add_argument('--features',action='store',type=str,default='SURF',dest='features',
-                        help='[SIFT|SURF] Feature algorithm to use (default: SURF)')
+    parser.add_argument('--features',action='store',type=str,default='SIFT',dest='features',
+                        help='[SIFT|ORB] Feature algorithm to use (default: SIFT)')
     parser.add_argument('--matcher',action='store',type=str,default='BFMatcher',dest='matcher',
                         help='[BFMatcher|FlannBasedMatcher] Matching algorithm to use \
                         (default: BFMatcher)') 
-    parser.add_argument('--cross_check',action='store',type=bool,default=True,dest='cross_check',
-                        help='[True|False] Whether to cross check feature matching or not \
-                        (default: True)') 
+    parser.add_argument('--cross-check',action='store_true',default=False,dest='cross_check',
+                        help='Whether to cross check feature matching or not \
+                        (default: False)') 
 
-    #epipolar geometry parameters
-    parser.add_argument('--calibration_mat',action='store',type=str,default='benchmark',
-                        dest='calibration_mat',help='[benchmark|lg_g3] type of intrinsic camera \
-                        to use (default: benchmark)')
-    parser.add_argument('--fund_method',action='store',type=str,default='FM_RANSAC',
+    #epipolar geometry parameters (calibration now automatic from HEIC metadata)
+    parser.add_argument('--fund-method',action='store',type=str,default='FM_RANSAC',
                         dest='fund_method',help='method to estimate fundamental matrix \
                         (default: FM_RANSAC)')
-    parser.add_argument('--outlier_thres',action='store',type=float,default=.9,
+    parser.add_argument('--outlier-thres',action='store',type=float,default=.9,
                         dest='outlier_thres',help='threhold value of outlier to be used in\
                          fundamental matrix estimation (default: 0.9)')
-    parser.add_argument('--fund_prob',action='store',type=float,default=.9,dest='fund_prob',
+    parser.add_argument('--fund-prob',action='store',type=float,default=.9,dest='fund_prob',
                         help='confidence in fundamental matrix estimation required (default: 0.9)')
     
     #PnP parameters
-    parser.add_argument('--pnp_method',action='store',type=str,default='SOLVEPNP_DLS',
+    parser.add_argument('--pnp-method',action='store',type=str,default='SOLVEPNP_DLS',
                         dest='pnp_method',help='[SOLVEPNP_DLS|SOLVEPNP_EPNP|..] method used for\
                         PnP estimation, see OpenCV doc for more options (default: SOLVEPNP_DLS')
-    parser.add_argument('--pnp_prob',action='store',type=float,default=.99,dest='pnp_prob',
+    parser.add_argument('--pnp-prob',action='store',type=float,default=.99,dest='pnp_prob',
                         help='confidence in PnP estimation required (default: 0.99)')
-    parser.add_argument('--reprojection_thres',action='store',type=float,default=8.,
+    parser.add_argument('--reprojection-thres',action='store',type=float,default=8.,
                         dest='reprojection_thres',help='reprojection threshold in PnP estimation \
                         (default: 8.)')
 
     #misc
-    parser.add_argument('--plot_error',action='store',type=bool,default=False,dest='plot_error')
+    parser.add_argument('--plot-error',action='store_true',default=False,dest='plot_error')
+    parser.add_argument('--visualize-3d',action='store_true',default=False,dest='visualize_3d',
+                        help='Create interactive 3D visualization of point cloud (default: False)')
 
 def PostprocessArgs(opts): 
     opts.fund_method = getattr(cv2,opts.fund_method)

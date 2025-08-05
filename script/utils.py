@@ -1,7 +1,6 @@
 import numpy as np 
 import cv2 
-import pdb
-from itertools import izip 
+
 
 def SerializeKeypoints(kp): 
     """Serialize list of keypoint objects so it can be saved using pickle
@@ -31,8 +30,8 @@ def DeserializeKeypoints(kp):
 
     out = []
     for point in kp:
-        temp = cv2.KeyPoint(x=point[0][0],y=point[0][1],_size=point[1], _angle=point[2],
-         _response=point[3], _octave=point[4], _class_id=point[5]) 
+        temp = cv2.KeyPoint(point[0][0], point[0][1], point[1], point[2],
+                           point[3], point[4], point[5]) 
         out.append(temp)
 
     return out
@@ -119,7 +118,7 @@ def pts2ply(pts,colors,filename='out.ply'):
         
         #pdb.set_trace()
         colors = colors.astype(int)
-        for pt, cl in izip(pts,colors): 
+        for pt, cl in zip(pts,colors): 
             f.write('{} {} {} {} {} {}\n'.format(pt[0],pt[1],pt[2],
                                                 cl[0],cl[1],cl[2]))
 

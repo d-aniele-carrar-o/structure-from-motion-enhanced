@@ -6,3 +6,4 @@ data/
 .vscode/
 *.ply
 *.txt
+.DS_Store

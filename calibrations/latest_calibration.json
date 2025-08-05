@@ -1,0 +1,51 @@
+{
+  "timestamp": "20250805_134052",
+  "camera_matrix": [
+    [
+      1710.0193386408296,
+      0.0,
+      949.4300192984225
+    ],
+    [
+      0.0,
+      1710.0193386408296,
+      493.0268499306861
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    [
+      0.001205006379641397,
+      -0.2949946188662844,
+      -0.005196900467096759,
+      -0.002733140702144993,
+      5.940393734808285
+    ]
+  ],
+  "image_size": [
+    1920,
+    1080
+  ],
+  "reprojection_error": 0.1206568903640284,
+  "checkerboard_size": [
+    9,
+    7
+  ],
+  "square_size": 0.027,
+  "num_images": 15,
+  "camera_settings": {
+    "focus_mode": "FIXED",
+    "exposure_mode": "MANUAL",
+    "white_balance": "MANUAL",
+    "iso": "LOW",
+    "lens": "WIDE_ANGLE"
+  },
+  "focal_length_x": 1710.0193386408296,
+  "focal_length_y": 1710.0193386408296,
+  "principal_point_x": 949.4300192984225,
+  "principal_point_y": 493.0268499306861
+}
