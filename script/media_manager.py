@@ -60,11 +60,11 @@ def extract_camera_params_from_heic(heic_path):
         except:
             pass
     
-    # iPhone defaults
+    # NO DEFAULTS - metadata MUST come from original file
     if not all([width, height, focal_length_mm]):
-        width, height = 4032, 3024
-        focal_length_mm = 4.25
-        focal_length_35mm = 26
+        print(f"ERROR: Failed to extract required metadata from HEIC file: {heic_path}")
+        print(f"  Missing: width={width}, height={height}, focal_length_mm={focal_length_mm}")
+        return None
     
     # Calculate camera matrix
     sensor_width_mm = 6.0
@@ -150,24 +150,96 @@ def calculate_blur_score(image):
 
 
 def extract_video_camera_params(video_path):
-    """Extract camera parameters from video metadata"""
+    """Extract camera parameters from video metadata - ALWAYS from original file"""
+    # Verify we're processing the original file
+    if not os.path.exists(video_path):
+        print(f"  ERROR: Original video file not found: {video_path}")
+        return None
+        
+    print(f"  📹 Processing ORIGINAL file: {os.path.basename(video_path)}")
+    
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
+        print(f"  ERROR: Cannot open video file: {video_path}")
         return None
     
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
     
-    # iPhone video typical parameters
-    focal_length_mm = 4.25  # iPhone main camera
-    sensor_width_mm = 6.0   # iPhone sensor width
+    focal_length_mm, focal_length_35mm = None, None
     
-    # Calculate focal length in pixels for video resolution
+    # Extract metadata using exiftool (most reliable for iPhone files)
+    try:
+        result = subprocess.run(['exiftool', '-j', video_path], 
+                              capture_output=True, text=True, check=True)
+        metadata = json.loads(result.stdout)[0]
+        
+        # Search for focal length data
+        for key, value in metadata.items():
+            # Extract focal length from lens model (e.g., "iPhone 15 Pro back camera 6.765mm f/1.78")
+            if 'lensmodel' in key.lower() and isinstance(value, str) and 'mm' in value:
+                import re
+                match = re.search(r'(\d+\.\d+)mm', value)
+                if match:
+                    focal_length_mm = float(match.group(1))
+            
+            # Extract 35mm equivalent
+            elif 'focal' in key.lower() and '35mm' in key.lower() and value:
+                try:
+                    focal_length_35mm = float(value)
+                except:
+                    pass
+                        
+    except Exception:
+        pass
+    
+    # Try ffprobe as fallback
+    if not focal_length_mm:
+        try:
+            result = subprocess.run([
+                'ffprobe', '-v', 'quiet', '-print_format', 'json', 
+                '-show_streams', '-show_format', video_path
+            ], capture_output=True, text=True, check=True)
+            
+            data = json.loads(result.stdout)
+            # Look for Apple QuickTime camera tags
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    tags = stream.get('tags', {})
+                    for key, value in tags.items():
+                        if 'focal' in key.lower() or 'lens' in key.lower():
+                            try:
+                                focal_length_mm = float(value)
+                            except:
+                                pass
+        except Exception:
+            pass
+    
+    # NO DEFAULTS - metadata MUST come from original file
+    if not focal_length_mm:
+        print(f"  ERROR: Failed to extract focal length from original file: {video_path}")
+        print(f"  This means the original file lacks camera metadata.")
+        print(f"  Check iPhone camera settings or use a different source file.")
+        return None
+    else:
+        print(f"  SUCCESS: Extracted focal length: {focal_length_mm}mm, 35mm equiv: {focal_length_35mm}mm")
+    
+    # Calculate sensor width from metadata only
+    if not focal_length_35mm:
+        print(f"  ERROR: Missing 35mm equivalent focal length for sensor width calculation")
+        return None
+    
+    sensor_width_mm = (focal_length_mm * 36.0) / focal_length_35mm
+    
+    # Calculate camera matrix
     fx = (focal_length_mm * width) / sensor_width_mm
     fy = fx
     cx = width / 2.0
     cy = height / 2.0
+    
+    print(f"  Calculated camera matrix: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+    print(f"  Sensor width used: {sensor_width_mm:.2f}mm")
     
     return {
         'camera_matrix': [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
@@ -176,7 +248,7 @@ def extract_video_camera_params(video_path):
         'fx': fx, 'fy': fy, 'cx': cx, 'cy': cy
     }
 
-def extract_frames_from_video(video_path, output_dir, frame_interval=10, max_frames=50, quality_threshold=50):
+def extract_frames_from_video(video_path, output_dir, frame_interval=10, max_frames=50, quality_threshold=25):
     """Extract frames from video with optimal spacing for SFM"""
     os.makedirs(output_dir, exist_ok=True)
     
@@ -217,9 +289,8 @@ def extract_frames_from_video(video_path, output_dir, frame_interval=10, max_fra
     cap.release()
     print(f"Extracted {extracted_count} frames to {output_dir}")
     
-    # Extract camera parameters for this video
-    video_camera_params = extract_video_camera_params(video_path)
-    return extracted_count, video_camera_params
+    # Don't extract camera params here - should be done from original file only
+    return extracted_count, None
 
 
 def process_media_directory(input_dir, output_dir, dataset='custom', **kwargs):
@@ -274,45 +345,59 @@ def process_media_directory(input_dir, output_dir, dataset='custom', **kwargs):
     if video_files:
         print(f"\nProcessing {len(video_files)} video files...")
         for video_file in video_files:
-            video_path = os.path.join(input_dir, video_file)
+            original_video_path = os.path.join(input_dir, video_file)  # ALWAYS use original path
             
-            # Convert .MOV to .MP4 if needed
+            # STEP 1: ALWAYS extract camera parameters from ORIGINAL file FIRST
+            print(f"  Extracting camera parameters from ORIGINAL file: {video_file}")
+            video_camera_params = extract_video_camera_params(original_video_path)
+            
+            # STEP 2: Handle file conversion/copying for frame extraction
+            processing_video_path = original_video_path
+            
             if video_file.lower().endswith('.mov'):
+                # Convert MOV to MP4 for better frame extraction compatibility
                 mp4_file = video_file.rsplit('.', 1)[0] + '.mp4'
                 mp4_path = os.path.join(videos_dir, mp4_file)
                 
                 if not os.path.exists(mp4_path):
-                    print(f"  Converting {video_file} to MP4...")
-                    if convert_mov_to_mp4(video_path, mp4_path):
-                        video_path = mp4_path
+                    print(f"  Converting {video_file} to MP4 for frame extraction...")
+                    if convert_mov_to_mp4(original_video_path, mp4_path):
+                        processing_video_path = mp4_path
                         print(f"  Converted: {video_file} -> {mp4_file}")
                     else:
-                        print(f"  Failed to convert {video_file}")
-                        continue
+                        print(f"  Failed to convert {video_file}, using original")
+                        processing_video_path = original_video_path
                 else:
-                    video_path = mp4_path
+                    processing_video_path = mp4_path
+                    print(f"  Using existing converted file: {mp4_file}")
             else:
                 # Copy other video formats to videos directory
                 import shutil
                 video_dest = os.path.join(videos_dir, video_file)
                 if not os.path.exists(video_dest):
-                    shutil.copy2(video_path, video_dest)
-                video_path = video_dest
+                    shutil.copy2(original_video_path, video_dest)
+                processing_video_path = video_dest
             
-            # Extract frames
-            print(f"  Extracting frames from {os.path.basename(video_path)}...")
-            extracted, video_camera_params = extract_frames_from_video(
-                video_path, images_dir,
+            # STEP 3: Extract frames (using converted file if available for compatibility)
+            print(f"  Extracting frames from {os.path.basename(processing_video_path)}...")
+            extracted, _ = extract_frames_from_video(
+                processing_video_path, images_dir,
                 kwargs.get('frame_interval', 10),
                 kwargs.get('max_frames', 50),
-                kwargs.get('quality_threshold', 50)
+                kwargs.get('quality_threshold', 25)
             )
             print(f"  Extracted {extracted} frames")
             
-            # Use video camera parameters if no HEIC parameters available
+            # STEP 4: Use camera parameters from ORIGINAL file
             if not camera_params and video_camera_params:
                 camera_params = video_camera_params
-                print(f"  Using video camera parameters: {video_camera_params['image_size']}")
+                print(f"  ✓ Using camera parameters from ORIGINAL {video_file}: {video_camera_params['image_size']}")
+            elif video_camera_params:
+                print(f"  ✓ Camera parameters extracted from ORIGINAL {video_file} (HEIC takes priority)")
+            else:
+                print(f"  ❌ CRITICAL: No camera parameters extracted from {video_file}")
+                print(f"  ❌ Cannot proceed without camera calibration data from original files")
+                print(f"  ❌ Check iPhone camera settings or file metadata")
     
     # Copy regular image files
     if image_files:
@@ -334,12 +419,19 @@ def process_media_directory(input_dir, output_dir, dataset='custom', **kwargs):
         with open(calib_file, 'w') as f:
             json.dump(camera_params, f, indent=2)
         
-        print(f"\nCamera calibration saved: {calib_file}")
+        print(f"\n✅ Camera calibration saved: {calib_file}")
         print(f"  Resolution: {camera_params['image_size']}")
         print(f"  fx: {camera_params['fx']:.1f}, fy: {camera_params['fy']:.1f}")
         print(f"  cx: {camera_params['cx']:.1f}, cy: {camera_params['cy']:.1f}")
+        print(f"  Focal length: {camera_params['focal_length_mm']}mm")
     else:
-        print("\nNo camera calibration available - using default parameters")
+        print(f"\n❌ CRITICAL ERROR: No camera calibration data extracted from original files!")
+        print(f"❌ Cannot proceed with SFM reconstruction without camera parameters.")
+        print(f"❌ Ensure your iPhone/HEIC files contain proper camera metadata.")
+        print(f"\n📱 iPhone Camera Settings to Enable Metadata:")
+        print(f"   Settings > Camera > Formats > Most Compatible (NOT High Efficiency)")
+        print(f"   Settings > Privacy & Security > Location Services > Camera > While Using App")
+        return  # Stop processing if no calibration available
     
     # Count final images
     final_images = [f for f in os.listdir(images_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
@@ -390,8 +482,8 @@ def main():
                        help='Extract every N frames (default: 10)')
     parser.add_argument('--max-frames', type=int, default=50,
                        help='Maximum frames per video (default: 50)')
-    parser.add_argument('--quality-threshold', type=float, default=50,
-                       help='Minimum blur score (default: 50)')
+    parser.add_argument('--quality-threshold', type=float, default=25,
+                       help='Minimum blur score (default: 25)')
     
     parser.add_argument('--instructions', action='store_true',
                        help='Show iPhone camera setup instructions')

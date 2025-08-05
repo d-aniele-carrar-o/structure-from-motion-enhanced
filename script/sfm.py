@@ -57,13 +57,21 @@ class SFM(object):
             with open(calib_path, 'r') as f:
                 calib_data = json.load(f)
             self.K = np.array(calib_data['camera_matrix'])
-            print(f'Using camera calibration for {opts.dataset}:')
-            print(f'  Resolution: {calib_data["image_size"]}')
+            print(f'\n=== CAMERA CALIBRATION LOADED ===')
+            print(f'Calibration file: {calib_path}')
+            print(f'Dataset: {opts.dataset}')
+            print(f'Resolution: {calib_data["image_size"]}')
+            print(f'Focal length (mm): {calib_data.get("focal_length_mm", "N/A")}')
+            print(f'Camera matrix:')
             print(f'  fx: {self.K[0,0]:.1f}, fy: {self.K[1,1]:.1f}')
             print(f'  cx: {self.K[0,2]:.1f}, cy: {self.K[1,2]:.1f}')
+            print(f'Full matrix:\n{self.K}')
+            print(f'================================\n')
         else:
             # Fallback: estimate from first image
-            print('No calibration found. Using image-based estimation...')
+            print('\n=== NO CALIBRATION FOUND ===')
+            print(f'Calibration file not found: {calib_path}')
+            print('Using image-based estimation...')
             img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.jpg'))
             if img_sample is None:
                 img_sample = cv2.imread(os.path.join(self.images_dir, self.image_names[0] + '.png'))
@@ -71,6 +79,7 @@ class SFM(object):
             f = max(w, h)  # Rough estimate
             self.K = np.array([[f, 0, w/2], [0, f, h/2], [0, 0, 1]])
             print(f'Using estimated calibration for {w}x{h} images: f={f}')
+            print(f'============================\n')
         
     def _LoadFeatures(self, name): 
         with open(os.path.join(self.feat_dir,'kp_{}.pkl'.format(name)),'rb') as f: 
