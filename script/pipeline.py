@@ -5,13 +5,18 @@ Automatically runs feature matching if needed, then performs SFM reconstruction.
 """
 
 import os
-import argparse
+import cv2
+import numpy as np
+from pickle import load
+from tqdm import tqdm
+from argparse import ArgumentParser
 from types import SimpleNamespace
 
 # Import existing functions
 from featmatch import FeatMatch
 from sfm import SFM
 from media_manager import process_media_directory
+from utils import DeserializeKeypoints, DeserializeMatches
 
 
 def check_features_exist(data_dir, dataset, features, matcher, ext):
@@ -35,7 +40,6 @@ def check_features_exist(data_dir, dataset, features, matcher, ext):
     
     return False
 
-
 def clean_pipeline_files(data_dir, dataset, out_dir):
     """Clean all pipeline generated files"""
     import shutil
@@ -45,6 +49,7 @@ def clean_pipeline_files(data_dir, dataset, out_dir):
         os.path.join(data_dir, dataset, 'videos'),
         os.path.join(data_dir, dataset, 'features'),
         os.path.join(data_dir, dataset, 'matches'),
+        os.path.join(data_dir, dataset, 'matches_vis'),
         os.path.join(out_dir, dataset)
     ]
     
@@ -52,6 +57,136 @@ def clean_pipeline_files(data_dir, dataset, out_dir):
         if os.path.exists(dir_path):
             shutil.rmtree(dir_path)
             print(f"Cleaned: {dir_path}")
+
+def create_panorama(args):
+    """
+    Stitches images into a panorama using a more robust method
+    to prevent drift and applies blending for a nicer result.
+    """
+    print("\nStarting robust panorama creation...")
+    images_dir = os.path.join(args.data_dir, args.dataset, 'images')
+    feat_dir = os.path.join(args.data_dir, args.dataset, 'features', args.features)
+    matches_dir = os.path.join(args.data_dir, args.dataset, 'matches', args.matcher)
+    
+    image_names = sorted([x.split('.')[0] for x in os.listdir(images_dir) if x.split('.')[-1].lower() in args.ext])
+    
+    if len(image_names) < 2:
+        print("Not enough images to create a panorama.")
+        return
+
+    # 1. Load all features
+    print("  Loading features...")
+    features = {}
+    for name in image_names:
+        kp_path = os.path.join(feat_dir, f'kp_{name}.pkl')
+        desc_path = os.path.join(feat_dir, f'desc_{name}.pkl')
+        with open(kp_path, 'rb') as f: kp = load(f)
+        with open(desc_path, 'rb') as f: desc = load(f)
+        features[name] = (DeserializeKeypoints(kp), desc)
+
+    # 2. Calculate all cumulative homographies relative to the first image
+    H_cumulative = np.identity(3)
+    # This list will store the raw image and the homography that maps it to the first image's coordinate system
+    images_to_warp = []
+    
+    # Add the first image (the reference frame)
+    base_name = image_names[0]
+    base_img_path = os.path.join(images_dir, f"{base_name}.{args.ext[0]}")
+    base_img = cv2.imread(base_img_path)
+    images_to_warp.append({'img': base_img, 'name': base_name, 'H': np.identity(3)})
+
+    for i in tqdm(range(1, len(image_names)), desc="Processing images"):        
+        prev_name = image_names[i-1]
+        curr_name = image_names[i]
+        
+        # print(f"  Calculating transform for {curr_name} -> {base_name}...")
+        
+        kp1, _ = features[prev_name]
+        kp2, _ = features[curr_name]
+        
+        match_path = os.path.join(matches_dir, f'match_{prev_name}_{curr_name}.pkl')
+        if not os.path.exists(match_path):
+            print(f"    Match file not found: {match_path}. Halting panorama creation.")
+            return
+
+        with open(match_path, 'rb') as f:
+            matches = DeserializeMatches(load(f))
+        
+        if len(matches) < args.min_matches:
+            # print(f"    Too few matches between {prev_name} and {curr_name} ({len(matches)}). Halting.")
+            return
+
+        pts1 = np.float32([kp.pt for kp in kp1])[np.array([m.queryIdx for m in matches])]
+        pts2 = np.float32([kp.pt for kp in kp2])[np.array([m.trainIdx for m in matches])]
+        
+        # Homography to map current image to *previous* image
+        H_relative, _ = cv2.findHomography(pts2, pts1, cv2.RANSAC, 5.0)
+
+        if H_relative is None:
+            print(f"    Could not find homography for {curr_name}. Halting.")
+            return
+
+        # Accumulate the homography to map current image to the *base* image
+        H_cumulative = H_cumulative @ H_relative
+        
+        curr_img_path = os.path.join(images_dir, f"{curr_name}.{args.ext[0]}")
+        curr_img = cv2.imread(curr_img_path)
+        images_to_warp.append({'img': curr_img, 'name': curr_name, 'H': H_cumulative})
+
+    # 3. Determine the final canvas size by transforming all image corners
+    print("  Determining final canvas size...")
+    all_corners = []
+    for item in images_to_warp:
+        h, w = item['img'].shape[:2]
+        corners = np.float32([[0, 0], [0, h], [w, h], [w, 0]]).reshape(-1, 1, 2)
+        warped_corners = cv2.perspectiveTransform(corners, item['H'])
+        all_corners.append(warped_corners)
+
+    all_corners = np.concatenate(all_corners, axis=0)
+    x_min, y_min = np.int32(all_corners.min(axis=0).ravel() - 0.5)
+    x_max, y_max = np.int32(all_corners.max(axis=0).ravel() + 0.5)
+    
+    # 4. Create a translation matrix to move the panorama to the top-left corner
+    H_translation = np.array([[1, 0, -x_min], [0, 1, -y_min], [0, 0, 1]])
+
+    output_width = x_max - x_min
+    output_height = y_max - y_min
+    
+    # 5. Warp all images onto the final canvas and blend them
+    print("  Warping and blending images...")
+    # Use float for accumulation to allow for averaging
+    panorama = np.zeros((output_height, output_width, 3), np.float32)
+    # Keep track of how many images contribute to each pixel for averaging
+    pixel_counts = np.zeros((output_height, output_width, 3), np.float32)
+
+    for item in tqdm(images_to_warp, desc="Warping images"):
+        H_final = H_translation @ item['H']
+        
+        # Warp the image to the final canvas size
+        warped_img = cv2.warpPerspective(item['img'], H_final, (output_width, output_height)).astype(np.float32)
+        
+        # Create a mask of where the warped image has content (is not black)
+        mask = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY) > 0
+        
+        # Add the warped image to the panorama accumulator
+        panorama += warped_img
+        # Add the mask (converted to float) to the pixel counter. We need 3 channels for color.
+        pixel_counts += cv2.merge([mask.astype(np.float32)] * 3)
+
+    # Avoid division by zero for pixels that have no contribution
+    pixel_counts[pixel_counts == 0] = 1.0
+    
+    # Average the pixel values by dividing the sum by the count
+    panorama = (panorama / pixel_counts).astype(np.uint8)
+
+    # Save the final panorama
+    panorama_out_dir = os.path.join(args.out_dir, args.dataset)
+    if not os.path.exists(panorama_out_dir):
+        os.makedirs(panorama_out_dir)
+    
+    panorama_path = os.path.join(panorama_out_dir, 'panorama_robust.jpg')
+    cv2.imwrite(panorama_path, panorama)
+    print(f"\n✅ Robust panorama saved to: {panorama_path}")
 
 def run_pipeline(args):
     """Run complete SFM pipeline"""
@@ -126,23 +261,35 @@ def run_pipeline(args):
         featmatch_opts.features = args.features
         featmatch_opts.matcher = args.matcher
         featmatch_opts.cross_check = args.cross_check
+        featmatch_opts.max_features = args.max_features
+        featmatch_opts.ratio_threshold = args.ratio_threshold
+        featmatch_opts.min_matches = args.min_matches
+        featmatch_opts.save_matches_vis = args.save_matches_vis
+
+        # Pass the geometric verification parameters from the main arguments
+        featmatch_opts.fund_method = args.fund_method
+        featmatch_opts.outlier_thres = args.outlier_thres
+        featmatch_opts.fund_prob = args.fund_prob
+
         featmatch_opts.print_every = 1
         featmatch_opts.save_results = False
         
         # Run feature matching (pass empty list to use directory scanning)
-        FeatMatch(featmatch_opts, [])
+        FeatMatch(featmatch_opts)
         print("Feature matching completed.\n")
     else:
         print("Features/matches found. Skipping feature matching.\n")
+    
+    if args.create_panorama:
+        create_panorama(args)
     
     # Run SFM
     print("Starting SFM reconstruction...")
     sfm = SFM(args)
     sfm.Run()
 
-
 def main():
-    parser = argparse.ArgumentParser(description='Complete Structure from Motion Pipeline')
+    parser = ArgumentParser(description='Complete Structure from Motion Pipeline')
     
     # Directory arguments
     parser.add_argument('--data-dir', type=str, default='data', 
@@ -161,6 +308,16 @@ def main():
                        help='Matching algorithm (default: BFMatcher)')
     parser.add_argument('--cross-check', action='store_true', default=True,
                        help='Use cross-check matching')
+    parser.add_argument('--max-features', type=int, default=5000,
+                       help='Maximum features to extract per image (default: 5000)')
+    parser.add_argument('--ratio-threshold', type=float, default=0.75,
+                       help='Lowe ratio test threshold (default: 0.75)')
+    parser.add_argument('--min-matches', type=int, default=50,
+                       help='Minimum matches required between images (default: 50)')
+    parser.add_argument('--save-matches-vis', action='store_true', default=True,
+                       help='Save images with feature matches drawn on them')
+    parser.add_argument('--create-panorama', action='store_true', default=True,
+                       help='Create a panorama visualization from the images')
     
     # SFM arguments (calibration is now automatic from HEIC metadata)
     parser.add_argument('--fund-method', type=str, default='FM_RANSAC',
@@ -185,12 +342,12 @@ def main():
     # Media processing arguments
     parser.add_argument('--media-dir', type=str, default=None,
                        help='Directory containing media files (HEIC, MOV, MP4, etc.)')
-    parser.add_argument('--frame-interval', type=int, default=10,
-                       help='Extract every N frames from video (default: 10)')
-    parser.add_argument('--max-frames', type=int, default=50,
-                       help='Maximum frames to extract from video (default: 50)')
-    parser.add_argument('--quality-threshold', type=float, default=50,
-                       help='Minimum quality threshold for frame extraction (default: 50)')
+    parser.add_argument('--frame-interval', type=int, default=20,
+                       help='Extract every N frames from video (default: 5)')
+    parser.add_argument('--max-frames', type=int, default=100,
+                       help='Maximum frames to extract from video (default: 100)')
+    parser.add_argument('--quality-threshold', type=float, default=25,
+                       help='Minimum quality threshold for frame extraction (default: 30)')
     
     # Clean argument
     parser.add_argument('--clean', action='store_true', default=False,

@@ -9,6 +9,7 @@ import cv2
 import json
 import argparse
 import subprocess
+from tqdm import tqdm
 
 # HEIC support
 try:
@@ -60,13 +61,10 @@ def extract_camera_params_from_heic(heic_path):
         except:
             pass
     
-    # NO DEFAULTS - metadata MUST come from original file
     if not all([width, height, focal_length_mm]):
         print(f"ERROR: Failed to extract required metadata from HEIC file: {heic_path}")
-        print(f"  Missing: width={width}, height={height}, focal_length_mm={focal_length_mm}")
         return None
     
-    # Calculate camera matrix
     sensor_width_mm = 6.0
     if focal_length_mm and focal_length_35mm:
         sensor_width_mm = (float(focal_length_mm) * 36.0) / float(focal_length_35mm)
@@ -112,32 +110,12 @@ def convert_heic_to_jpg(heic_path, jpg_path, quality=95):
 def convert_mov_to_mp4(mov_path, mp4_path):
     """Convert iPhone .MOV to .MP4 for better compatibility"""
     try:
-        # Try modern ffmpeg command first
         cmd = [
             'ffmpeg', '-i', mov_path, '-c:v', 'libx264', '-c:a', 'aac',
             '-preset', 'medium', '-crf', '23', '-y', mp4_path
         ]
-        result = subprocess.run(cmd, capture_output=True, check=True, text=True)
+        subprocess.run(cmd, capture_output=True, check=True, text=True)
         return True
-    except subprocess.CalledProcessError as e:
-        if 'preset' in e.stderr:
-            # Fallback for older ffmpeg versions without preset support
-            try:
-                cmd = [
-                    'ffmpeg', '-i', mov_path, '-c:v', 'libx264', '-c:a', 'aac',
-                    '-crf', '23', '-y', mp4_path
-                ]
-                result = subprocess.run(cmd, capture_output=True, check=True, text=True)
-                return True
-            except subprocess.CalledProcessError as e2:
-                print(f"    ffmpeg error: {e2.stderr}")
-                return False
-        else:
-            print(f"    ffmpeg error: {e.stderr}")
-            return False
-    except FileNotFoundError:
-        print(f"    ffmpeg not found. Install with: brew install ffmpeg")
-        return False
     except Exception as e:
         print(f"    Conversion error: {e}")
         return False
@@ -151,16 +129,11 @@ def calculate_blur_score(image):
 
 def extract_video_camera_params(video_path):
     """Extract camera parameters from video metadata - ALWAYS from original file"""
-    # Verify we're processing the original file
     if not os.path.exists(video_path):
-        print(f"  ERROR: Original video file not found: {video_path}")
         return None
         
-    print(f"  📹 Processing ORIGINAL file: {os.path.basename(video_path)}")
-    
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"  ERROR: Cannot open video file: {video_path}")
         return None
     
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -169,77 +142,41 @@ def extract_video_camera_params(video_path):
     
     focal_length_mm, focal_length_35mm = None, None
     
-    # Extract metadata using exiftool (most reliable for iPhone files)
     try:
         result = subprocess.run(['exiftool', '-j', video_path], 
                               capture_output=True, text=True, check=True)
         metadata = json.loads(result.stdout)[0]
+        focal_length_35mm = metadata.get('FocalLengthIn35mmFormat')
+        if focal_length_35mm:
+            focal_length_35mm = float(str(focal_length_35mm).replace('mm', '').strip())
         
-        # Search for focal length data
-        for key, value in metadata.items():
-            # Extract focal length from lens model (e.g., "iPhone 15 Pro back camera 6.765mm f/1.78")
-            if 'lensmodel' in key.lower() and isinstance(value, str) and 'mm' in value:
-                import re
-                match = re.search(r'(\d+\.\d+)mm', value)
-                if match:
-                    focal_length_mm = float(match.group(1))
-            
-            # Extract 35mm equivalent
-            elif 'focal' in key.lower() and '35mm' in key.lower() and value:
-                try:
-                    focal_length_35mm = float(value)
-                except:
-                    pass
-                        
+        # More robust focal length extraction for different camera modules
+        if 'LensModel' in metadata:
+             import re
+             match = re.search(r'(\d+\.\d+)mm', metadata['LensModel'])
+             if match:
+                 focal_length_mm = float(match.group(1))
+
     except Exception:
         pass
     
-    # Try ffprobe as fallback
     if not focal_length_mm:
-        try:
-            result = subprocess.run([
-                'ffprobe', '-v', 'quiet', '-print_format', 'json', 
-                '-show_streams', '-show_format', video_path
-            ], capture_output=True, text=True, check=True)
-            
-            data = json.loads(result.stdout)
-            # Look for Apple QuickTime camera tags
-            for stream in data.get('streams', []):
-                if stream.get('codec_type') == 'video':
-                    tags = stream.get('tags', {})
-                    for key, value in tags.items():
-                        if 'focal' in key.lower() or 'lens' in key.lower():
-                            try:
-                                focal_length_mm = float(value)
-                            except:
-                                pass
-        except Exception:
-            pass
-    
-    # NO DEFAULTS - metadata MUST come from original file
-    if not focal_length_mm:
-        print(f"  ERROR: Failed to extract focal length from original file: {video_path}")
-        print(f"  This means the original file lacks camera metadata.")
-        print(f"  Check iPhone camera settings or use a different source file.")
+        print("  WARNING: Could not extract focal length from exiftool. Check video metadata.")
         return None
-    else:
-        print(f"  SUCCESS: Extracted focal length: {focal_length_mm}mm, 35mm equiv: {focal_length_35mm}mm")
-    
-    # Calculate sensor width from metadata only
+
     if not focal_length_35mm:
-        print(f"  ERROR: Missing 35mm equivalent focal length for sensor width calculation")
+        print("  WARNING: Missing 35mm equivalent focal length. Cannot accurately calculate sensor width.")
         return None
     
     sensor_width_mm = (focal_length_mm * 36.0) / focal_length_35mm
     
-    # Calculate camera matrix
     fx = (focal_length_mm * width) / sensor_width_mm
     fy = fx
     cx = width / 2.0
     cy = height / 2.0
     
+    print(f"  SUCCESS: Extracted focal length: {focal_length_mm}mm, 35mm equiv: {focal_length_35mm}mm")
     print(f"  Calculated camera matrix: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
-    print(f"  Sensor width used: {sensor_width_mm:.2f}mm")
     
     return {
         'camera_matrix': [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
@@ -248,50 +185,45 @@ def extract_video_camera_params(video_path):
         'fx': fx, 'fy': fy, 'cx': cx, 'cy': cy
     }
 
-def extract_frames_from_video(video_path, output_dir, frame_interval=10, max_frames=50, quality_threshold=25):
+def extract_frames_from_video(video_path, output_dir, frame_interval, max_frames, quality_threshold):
     """Extract frames from video with optimal spacing for SFM"""
     os.makedirs(output_dir, exist_ok=True)
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"Error: Cannot open video {video_path}")
-        return 0, None
+        return 0
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    print(f"Video: {total_frames} frames, {fps:.1f} fps, {width}x{height}, extracting every {frame_interval} frames")
+    print(f"Video: {total_frames} frames, {fps:.1f} fps, extracting every {frame_interval} frames")
     
     extracted_count = 0
     frame_count = 0
     
-    while cap.isOpened() and extracted_count < max_frames:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        if frame_count % frame_interval == 0:
-            blur_score = calculate_blur_score(frame)
+    with tqdm(total=total_frames, desc="Extracting frames") as pbar:
+        while cap.isOpened() and extracted_count < max_frames and frame_count < total_frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
             
-            if blur_score > quality_threshold:
-                frame_filename = f"frame_{extracted_count:04d}.jpg"
-                frame_path = os.path.join(output_dir, frame_filename)
-                cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                print(f"  Extracted: {frame_filename} (blur: {blur_score:.1f})")
-                extracted_count += 1
-            else:
-                print(f"  Skipped frame {frame_count} (blur: {blur_score:.1f})")
-        
-        frame_count += 1
+            if frame_count % frame_interval == 0:
+                blur_score = calculate_blur_score(frame)
+                
+                if blur_score > quality_threshold:
+                    frame_filename = f"frame_{extracted_count:04d}.jpg"
+                    frame_path = os.path.join(output_dir, frame_filename)
+                    cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    extracted_count += 1
+            
+            frame_count += 1
+            pbar.update(1)
     
     cap.release()
     print(f"Extracted {extracted_count} frames to {output_dir}")
-    
-    # Don't extract camera params here - should be done from original file only
-    return extracted_count, None
 
+    return extracted_count
 
 def process_media_directory(input_dir, output_dir, dataset='custom', **kwargs):
     """Process all media files in a directory"""
@@ -380,11 +312,11 @@ def process_media_directory(input_dir, output_dir, dataset='custom', **kwargs):
             
             # STEP 3: Extract frames (using converted file if available for compatibility)
             print(f"  Extracting frames from {os.path.basename(processing_video_path)}...")
-            extracted, _ = extract_frames_from_video(
+            extracted = extract_frames_from_video(
                 processing_video_path, images_dir,
-                kwargs.get('frame_interval', 10),
-                kwargs.get('max_frames', 50),
-                kwargs.get('quality_threshold', 25)
+                kwargs['frame_interval'],
+                kwargs['max_frames'],
+                kwargs['quality_threshold'],
             )
             print(f"  Extracted {extracted} frames")
             

@@ -1,174 +1,140 @@
-import cv2 
-import numpy as np 
-import pickle 
-import argparse
-import os 
-from time import time
+import os
+import cv2
+import numpy as np
+from pickle import load, dump
+from argparse import ArgumentParser
+from tqdm import tqdm
 
 from utils import * 
 
-def FeatMatch(opts, data_files=[]): 
+
+def FeatMatch(opts): 
     print(f"Starting FeatMatch with data_dir: {opts.data_dir}")
     print(f"Output dir: {opts.out_dir}")
     print(f"Allowed extensions: {opts.ext}")
     
-    if len(data_files) == 0: 
-        print(f"Scanning directory: {opts.data_dir}")
-        all_files = sorted(os.listdir(opts.data_dir))
-        print(f"Found files: {all_files}")
-        print(f"Extension check details:")
-        for x in all_files:
-            ext = x.split('.')[-1].lower()
-            match = ext in opts.ext
-            print(f"  {x} -> extension '{ext}' -> match: {match}")
-        
-        # Filter files and create corresponding paths and names
-        filtered_files = [x for x in all_files if x.split('.')[-1].lower() in opts.ext]
-        img_paths = [os.path.join(opts.data_dir, x) for x in filtered_files]
-        img_names = filtered_files  # Use the same filtered list
-        
-        print(f"Filtered image paths: {img_paths}")
-        print(f"Corresponding image names: {img_names}")
-    
-    else: 
-        img_paths = data_files
-        img_names = sorted([x.split('/')[-1] for x in data_files])
-        print(f"Using provided data files: {img_paths}")
-        
-    feat_out_dir = os.path.join(opts.out_dir,'features',opts.features)
-    matches_out_dir = os.path.join(opts.out_dir,'matches',opts.matcher)
-
-    print(f"Creating output directories:")
-    print(f"  Features: {feat_out_dir}")
-    print(f"  Matches: {matches_out_dir}")
-    
-    if not os.path.exists(feat_out_dir): 
-        os.makedirs(feat_out_dir)
-    if not os.path.exists(matches_out_dir): 
-        os.makedirs(matches_out_dir)
-    
-    data = []
-    t1 = time()
-    if len(img_paths) == 0:
-        print("ERROR: No images found! Check your data directory and file extensions.")
-        return
-        
+    img_paths = [os.path.join(opts.data_dir, x) for x in sorted(os.listdir(opts.data_dir)) if x.split('.')[-1].lower() in opts.ext]
+    img_names = [x.split('.')[0] for x in sorted(os.listdir(opts.data_dir)) if x.split('.')[-1].lower() in opts.ext]
     print(f"Processing {len(img_paths)} images...")
+
+    feat_out_dir = os.path.join(opts.out_dir, 'features', opts.features)
+    matches_out_dir = os.path.join(opts.out_dir, 'matches', opts.matcher)
     
-    for i, img_path in enumerate(img_paths): 
-        print(f"Processing image {i+1}/{len(img_paths)}: {img_path}")
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"WARNING: Could not read image {img_path}")
-            continue
-            
-        img_name = img_names[i].split('.')[0]
-        print(f"  Processing as image name: {img_name}")
-        img = img[:,:,::-1]
+    os.makedirs(feat_out_dir, exist_ok=True)
+    os.makedirs(matches_out_dir, exist_ok=True)
 
-        # Try to use xfeatures2d first, fallback to standard features
-        try:
-            feat = getattr(cv2.xfeatures2d, '{}_create'.format(opts.features))()
-        except AttributeError:
-            if opts.features == 'SURF':
-                print(f"SURF not available, using SIFT instead")
-                feat = cv2.SIFT_create()
-            elif opts.features == 'SIFT':
-                feat = cv2.SIFT_create()
-            else:
-                print(f"Feature {opts.features} not available, using ORB instead")
-                feat = cv2.ORB_create()
-        kp, desc = feat.detectAndCompute(img,None)
-        print(f"  Found {len(kp)} keypoints")
-        data.append((img_name, kp, desc))
+    if opts.save_matches_vis:
+        vis_matches_out_dir = os.path.join(opts.out_dir, 'matches_vis', opts.features)
+        os.makedirs(vis_matches_out_dir, exist_ok=True)
 
-        kp_ = SerializeKeypoints(kp)
+    # --- Feature Extraction ---
+    data = []
+    print("\nExtracting features...")
+    for i, img_path in tqdm(enumerate(img_paths), total=len(img_paths), desc="Extracting features"):
+        img_name = img_names[i]
         
-        kp_path = os.path.join(feat_out_dir, 'kp_{}.pkl'.format(img_name))
-        desc_path = os.path.join(feat_out_dir, 'desc_{}.pkl'.format(img_name))
-        
-        print(f"  Saving keypoints to: {kp_path}")
-        with open(kp_path,'wb') as out:
-            pickle.dump(kp_, out)
+        # Check if features already exist
+        kp_path = os.path.join(feat_out_dir, f'kp_{img_name}.pkl')
+        desc_path = os.path.join(feat_out_dir, f'desc_{img_name}.pkl')
 
-        print(f"  Saving descriptors to: {desc_path}")
-        with open(desc_path,'wb') as out:
-            pickle.dump(desc, out)
-            
-        # Verify files were created
         if os.path.exists(kp_path) and os.path.exists(desc_path):
-            print(f"  ✓ Files successfully saved for {img_name}")
+             with open(kp_path, 'rb') as f: kp = DeserializeKeypoints(load(f))
+             with open(desc_path, 'rb') as f: desc = load(f)
         else:
-            print(f"  ✗ ERROR: Failed to save files for {img_name}")
-
-        if opts.save_results: 
-            # Create visualization directory
-            vis_out_dir = os.path.join(opts.out_dir, 'visualizations')
-            if not os.path.exists(vis_out_dir):
-                os.makedirs(vis_out_dir)
+            img = cv2.imread(img_path)
+            if img is None: continue
             
-            # Draw simple red dots for keypoints
-            img_with_kp = img[:,:,::-1].copy()
-            for keypoint in kp:
-                x, y = int(keypoint.pt[0]), int(keypoint.pt[1])
-                cv2.circle(img_with_kp, (x, y), 3, (0, 0, 255), -1)  # Red filled circles
-            
-            # Save visualization
-            vis_path = os.path.join(vis_out_dir, f'{img_name}_keypoints.png')
-            cv2.imwrite(vis_path, img_with_kp)
-            print(f"  Saved keypoint visualization: {vis_path}")
+            feat = cv2.SIFT_create(nfeatures=opts.max_features)
+            kp, desc = feat.detectAndCompute(img, None)
 
-        t2 = time()
+            with open(kp_path, 'wb') as f:
+                dump(SerializeKeypoints(kp), f)
+            with open(desc_path, 'wb') as f:
+                dump(desc, f)
+        
+        data.append((img_name, kp, desc))
+    print("Feature extraction complete.")
 
-        if (i % opts.print_every) == 0:    
-            print(f"FEATURES DONE: {i+1}/{len(img_paths)} [time={(t2-t1):.2f}s]")
-
-        t1 = time()
-
-    num_done = 0 
-    num_matches = int(((len(data)-1) * (len(data))) / 2)
-    print(f"\nFeature extraction completed. Data contains {len(data)} images:")
-    for img_name, kp, desc in data:
-        print(f"  {img_name}: {len(kp)} keypoints")
+    # --- Feature Matching ---
+    print(f"\nStarting feature matching with geometric verification...")
     
-    print(f"\nStarting feature matching for {len(data)} images ({num_matches} pairs)...")
+    total_pairs = sum(range(len(data)))
+    with tqdm(total=total_pairs, desc="Matching image pairs") as pbar:
+        for i in range(len(data)):
+            for j in range(i + 1, len(data)):
+                pbar.update(1)
+                img_name1, kp1, desc1 = data[i]
+                img_name2, kp2, desc2 = data[j]
 
-    t1 = time()
-    for i in range(len(data)): 
-        for j in range(i+1, len(data)): 
-            img_name1, kp1, desc1 = data[i]
-            img_name2, kp2, desc2 = data[j]
+                # 1. KNN matching with Lowe's Ratio Test
+                matcher = getattr(cv2, opts.matcher)()
+                knn_matches = matcher.knnMatch(desc1, desc2, k=2)
+                
+                ratio_matches = []
+                for match_pair in knn_matches:
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        if m.distance < opts.ratio_threshold * n.distance:
+                            ratio_matches.append(m)
+                
+                # --- GEOMETRIC VERIFICATION STEP ---
+                good_matches = []
+                # At least 8 points are required to estimate the Fundamental Matrix
+                if len(ratio_matches) > 8:
+                    # Get the coordinates of the matched keypoints
+                    pts1 = np.float32([kp1[m.queryIdx].pt for m in ratio_matches])
+                    pts2 = np.float32([kp2[m.trainIdx].pt for m in ratio_matches])
 
-            matcher = getattr(cv2,opts.matcher)(crossCheck=opts.cross_check)
-            matches = matcher.match(desc1,desc2)
+                    # Estimate Fundamental Matrix using RANSAC
+                    F, mask = cv2.findFundamentalMat(pts1, pts2,
+                                                    method=opts.fund_method,
+                                                    ransacReprojThreshold=opts.outlier_thres,
+                                                    confidence=opts.fund_prob)
+                    
+                    # Use the mask to select only inlier matches
+                    if mask is not None:
+                        good_matches = np.array(ratio_matches)[mask.ravel() == 1].tolist()
 
-            matches = sorted(matches, key = lambda x:x.distance)
-            matches_ = SerializeMatches(matches)
+                if len(good_matches) < opts.min_matches:
+                    # print(f"  {img_name1} <-> {img_name2}: {len(good_matches)} inliers (SKIPPED - too few)")
+                    good_matches = [] # Save empty list
+                # else:
+                #     print(f"  {img_name1} <-> {img_name2}: {len(good_matches)} inliers (from {len(ratio_matches)} ratio-test matches)")
 
-            pickle_path = os.path.join(matches_out_dir, 'match_{}_{}.pkl'.format(img_name1,
-                                                                                 img_name2))
-            with open(pickle_path,'wb') as out:
-                pickle.dump(matches_, out)
+                # Save visualization and matches using the *geometrically verified* good_matches
+                if opts.save_matches_vis and len(good_matches) > 0:
+                    img1 = cv2.imread(img_paths[i])
+                    img2 = cv2.imread(img_paths[j])
+                    # Draw top 50 matches sorted by distance
+                    drawn_matches = sorted(good_matches, key=lambda x: x.distance)[:50]
+                    match_vis = cv2.drawMatches(img1, kp1, img2, kp2, drawn_matches, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+                    vis_path = os.path.join(vis_matches_out_dir, f'match_{img_name1}_{img_name2}.jpg')
+                    cv2.imwrite(vis_path, match_vis)
 
-            print(f"  {img_name1} <-> {img_name2}: {len(matches)} matches")
-            num_done += 1 
-            t2 = time()
-
-            if (num_done % opts.print_every) == 0: 
-                print(f"MATCHES DONE: {num_done}/{num_matches} [time={(t2-t1):.2f}s]")
-
-            t1 = time()
+                with open(os.path.join(matches_out_dir, f'match_{img_name1}_{img_name2}.pkl'), 'wb') as f:
+                    dump(SerializeMatches(good_matches), f)
     
-    # Report total matches
-    total_matches = sum([len(SerializeMatches(matcher.match(data[i][2], data[j][2]))) 
-                        for i in range(len(data)) for j in range(i+1, len(data))])
-    print(f"\nTotal matches found: {total_matches}")
+    total_matches = 0
+    valid_pairs = 0
+    for i in range(len(data)):
+        for j in range(i+1, len(data)):
+            img_name1, _, _ = data[i]
+            img_name2, _, _ = data[j]
+            pickle_path = os.path.join(matches_out_dir, f'match_{img_name1}_{img_name2}.pkl')
+            if os.path.exists(pickle_path):
+                with open(pickle_path, 'rb') as f:
+                    matches = load(f)
+                    if len(matches) > 0:
+                        total_matches += len(matches)
+                        valid_pairs += 1
+    
+    print(f"\nTotal inlier matches found: {total_matches} across {valid_pairs} valid pairs")
     print("Feature matching completed.")
-            
 
 
-def SetArguments(parser): 
-
+def set_arguments(parser):
+    parser = ArgumentParser()
+    
     #directories stuff
     parser.add_argument('--data-files',action='store',type=str,default='',dest='data_files') 
     parser.add_argument('--data-dir',action='store',type=str,default='../data/fountain-P11/images/',
@@ -189,7 +155,22 @@ def SetArguments(parser):
                         (default: BFMatcher)') 
     parser.add_argument('--cross-check',action='store_true',default=False,dest='cross_check',
                         help='Whether to cross check feature matching or not \
-                        (default: False)') 
+                        (default: False)')
+    parser.add_argument('--max-features',action='store',type=int,default=5000,dest='max_features',
+                        help='Maximum features to extract per image (default: 5000)')
+    parser.add_argument('--ratio-threshold',action='store',type=float,default=0.75,dest='ratio_threshold',
+                        help='Lowe ratio test threshold (default: 0.75)')
+    parser.add_argument('--min-matches',action='store',type=int,default=50,dest='min_matches',
+                        help='Minimum matches required between images (default: 50)') 
+    parser.add_argument('--save-matches-vis', action='store_true', default=True, 
+                        dest='save_matches_vis', help='whether to save images with matches drawn on them (default: True)')
+
+    parser.add_argument('--fund-method',action='store',type=str,default='FM_RANSAC',
+                        dest='fund_method',help='method to estimate fundamental matrix (default: FM_RANSAC)')
+    parser.add_argument('--outlier-thres',action='store',type=float,default=3.0,
+                        dest='outlier_thres',help='RANSAC outlier threshold for F-matrix estimation (default: 3.0)')
+    parser.add_argument('--fund-prob',action='store',type=float,default=0.99,
+                        dest='fund_prob',help='RANSAC confidence for F-matrix estimation (default: 0.99)')
     
     #misc
     parser.add_argument('--print-every',action='store', type=int, default=1, dest='print_every',
@@ -198,25 +179,25 @@ def SetArguments(parser):
     parser.add_argument('--save-results',action='store_true',default=False, 
                         dest='save_results',help='whether to save images with\
                         keypoints drawn on them (default: False)')  
+    
+    return parser.parse_args()
 
-def PostprocessArgs(opts): 
-    opts.ext = [x for x in opts.ext.split(',')]
-    
-    opts.data_files_ = []
-    if opts.data_files != '': 
-        opts.data_files_ = opts.data_files.split(',')
-    opts.data_files = opts.data_files_
-    
-    # Set default output directory if not specified
-    if opts.out_dir == '':
-        opts.out_dir = os.path.dirname(opts.data_dir) if opts.data_dir.endswith('/') else os.path.dirname(opts.data_dir + '/')
-        if opts.out_dir == '':
-            opts.out_dir = '.'
 
 if __name__=='__main__': 
-    parser = argparse.ArgumentParser()
-    SetArguments(parser)
-    opts = parser.parse_args()
-    PostprocessArgs(opts)
+    args = set_arguments()
+    
+    args.ext = [x for x in args.ext.split(',')]
+    
+    args.data_files_ = []
+    if args.data_files != '': 
+        args.data_files_ = args.data_files.split(',')
+    args.data_files = args.data_files_
+    
+    if args.out_dir == '':
+        args.out_dir = os.path.dirname(args.data_dir) if args.data_dir.endswith('/') else os.path.dirname(args.data_dir + '/')
+        if args.out_dir == '':
+            args.out_dir = '.'
+    
+    args.fund_method = getattr(cv2, args.fund_method)
 
-    FeatMatch(opts, opts.data_files)
+    FeatMatch(args)
