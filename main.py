@@ -80,6 +80,8 @@ def main():
                         help='Save images visualizing feature matches after geometric verification.')
     parser.add_argument('--visualize-3d', action='store_true', default=False,
                         help='Display an interactive 3D visualization of the final point cloud.')
+    parser.add_argument('--enable-bundle-adjustment', action='store_true', default=False,
+                        help='Enable Bundle Adjustment optimization (slow but may improve accuracy).')
 
     try:
         args = parser.parse_args()
@@ -116,6 +118,7 @@ def main():
             # Visualization
             save_matches_vis=args.save_matches_vis,
             visualize_3d=args.visualize_3d,
+            enable_bundle_adjustment=args.enable_bundle_adjustment,
         )
 
         logging.info("Configuration loaded. Starting SfM pipeline.")

@@ -3,6 +3,15 @@ data/
 results/
 cache/
 
+# SFM/COLMAP generated files
+sparse/
+dense/
+*.bin
+*.mvs
+*.log
+database.db
+*.ply
+
 # Python
 __pycache__/
 *.pyc
@@ -11,10 +20,27 @@ __pycache__/
 .Python
 *.so
 .pytest_cache/
+*.pkl
+
+# Media files (large)
+*.MOV
+*.mov
+*.MP4
+*.mp4
+*.HEIC
+*.heic
+*.JPG
+*.jpg
+*.JPEG
+*.jpeg
+*.PNG
+*.png
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
@@ -23,3 +49,17 @@ Thumbs.db
 # Virtual environments
 venv/
 env/
+.conda/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.temp
+*~

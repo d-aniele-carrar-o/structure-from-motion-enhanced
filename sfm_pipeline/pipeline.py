@@ -68,11 +68,54 @@ class Pipeline:
         self.reconstructor.run()
         logging.info("3D reconstruction stage complete.")
         
-        # --- Stage 4: Panorama Creation ---
+        # --- Stage 4: Dense Reconstruction (MVS) ---
+        self._run_dense_reconstruction()
+
+        # --- Stage 5: Panorama Creation ---
         logging.info("Creating panorama visualization...")
         self._create_panorama()
         logging.info("Panorama creation complete.")
+    
+    def _run_dense_reconstruction(self):
+        """
+        Executes the dense reconstruction using OpenMVS.
+        Requires OpenMVS binaries to be in the system's PATH.
+        """
+        logging.info("--- Starting Dense Reconstruction (MVS) ---")
+        mvs_scene_path = os.path.join(self.config.results_dir, 'scene.mvs')
         
+        # 1. Export the data from our pipeline
+        self.reconstructor.export_to_openmvs(mvs_scene_path)
+        
+        # 2. Run OpenMVS tools
+        image_dir = self.config.images_dir
+        
+        # Define paths for MVS artifacts
+        dense_point_cloud_path = os.path.join(self.config.results_dir, 'scene_dense.mvs')
+        mesh_path = os.path.join(self.config.results_dir, 'scene_mesh.mvs')
+        textured_mesh_path = os.path.join(self.config.results_dir, 'scene_mesh_textured.mvs')
+
+        try:
+            import subprocess
+
+            logging.info("Running MVS DensifyPointCloud...")
+            subprocess.run(['DensifyPointCloud', '-i', mvs_scene_path, '-o', dense_point_cloud_path, '-w', self.config.results_dir,  '--verbosity', '2'], check=True)
+            
+            logging.info("Running MVS ReconstructMesh...")
+            subprocess.run(['ReconstructMesh', '-i', dense_point_cloud_path, '-o', mesh_path, '-w', self.config.results_dir], check=True)
+            
+            logging.info("Running MVS TextureMesh...")
+            subprocess.run(['TextureMesh', '-i', mesh_path, '-o', textured_mesh_path, '-w', self.config.results_dir], check=True)
+
+            logging.info("--- Dense Reconstruction Complete ---")
+            logging.info(f"✅ Final textured model saved as: {textured_mesh_path}")
+
+        except FileNotFoundError:
+            logging.error("OpenMVS binaries (DensifyPointCloud, etc.) not found.")
+            logging.error("Please ensure they are installed and in your system's PATH.")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"An error occurred while running an OpenMVS command: {e}")
+
     def _clean_directories(self):
         """Removes all previously generated files and directories."""
         logging.warning("--- CLEANING PIPELINE FILES ---")

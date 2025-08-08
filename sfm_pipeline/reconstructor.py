@@ -26,12 +26,17 @@ class Reconstructor:
 
     def __init__(self, config: Config):
         self.config = config
+
         self.point_cloud = np.zeros((0, 3))
         self.point_cloud_colors = np.zeros((0, 3))
+
         self.image_names = sorted([os.path.splitext(f)[0] for f in os.listdir(config.images_dir) if f.lower().endswith(tuple(config.ext))])
         self.image_data: Dict[str, Dict[str, Any]] = {}
+        self.image_size: Optional[List[int]] = None
+        
         self.camera_poses: Dict[str, Dict[str, np.ndarray]] = {}
         self.point_map: Dict[int, Dict[str, int]] = {}
+        
         self.K = self._load_camera_calibration()
 
     def run(self):
@@ -62,12 +67,14 @@ class Reconstructor:
         logging.info(f"Initial reconstruction complete. Registered {len(self.camera_poses)} cameras and {len(self.point_cloud)} 3D points.")
         self._log_point_cloud_statistics("after initial reconstruction")
         
-        # 3. Optimize the entire reconstruction
-        if len(self.point_cloud) > 0 and len(self.camera_poses) > 2:
+        # 3. Optimize the entire reconstruction (optional)
+        if self.config.enable_bundle_adjustment and len(self.point_cloud) > 0 and len(self.camera_poses) > 2:
             self._run_bundle_adjustment()
             self._log_point_cloud_statistics("after bundle adjustment")
-        else:
+        elif self.config.enable_bundle_adjustment:
             logging.warning("Skipping bundle adjustment (not enough cameras or points).")
+        else:
+            logging.info("Bundle adjustment disabled (enable_bundle_adjustment=False).")
 
         # 4. Save the final point cloud and show it (if requested)
         if len(self.point_cloud) > 0:
@@ -442,6 +449,9 @@ class Reconstructor:
         with open(calib_path, 'r') as f:
             calib_data = json.load(f)
         
+        # Store the image size from the calibration file
+        self.image_size = calib_data.get('image_size')
+
         K = np.array(calib_data['camera_matrix'], dtype=np.float64)
         logging.info(f"Successfully loaded camera calibration from {calib_path}")
         k_str = f"[[{K[0,0]:.2f}, 0, {K[0,2]:.2f}], [0, {K[1,1]:.2f}, {K[1,2]:.2f}], [0, 0, 1]]"
@@ -474,3 +484,147 @@ class Reconstructor:
         logging.info(f"  • Spatial extent: X={extent[0]:.2f}, Y={extent[1]:.2f}, Z={extent[2]:.2f}")
         logging.info(f"  • Centroid: ({centroid[0]:.2f}, {centroid[1]:.2f}, {centroid[2]:.2f})")
         logging.info(f"  • Avg observations per point: {avg_observations:.1f}")
+
+    # def export_to_openmvs(self, mvs_scene_path: str):
+    #     """
+    #     Exports the reconstructed scene to the OpenMVS format.
+    #     """
+    #     logging.info("Exporting reconstruction to OpenMVS format...")
+        
+    #     # Ensure the directory for the .mvs file exists
+    #     os.makedirs(os.path.dirname(mvs_scene_path), exist_ok=True)
+        
+    #     with open(mvs_scene_path, 'w') as f:
+    #         # Header
+    #         f.write("OPENMVS_SCENE\n")
+    #         f.write("# Produced by Gemini's Awesome SfM Pipeline\n\n")
+            
+    #         # Platforms (not strictly needed but good practice)
+    #         f.write(f"PLATFORMS 1\n")
+    #         f.write("0 0\n\n") # Platform 0 with 0 cameras (we define cameras individually)
+
+    #         # Images
+    #         n_images = len(self.camera_poses)
+    #         f.write(f"IMAGES {n_images}\n")
+            
+    #         # Map image names to sorted indices
+    #         sorted_names = sorted(list(self.camera_poses.keys()))
+    #         name_to_id = {name: i for i, name in enumerate(sorted_names)}
+
+    #         for i, name in enumerate(sorted_names):
+    #             # Construct the full, absolute path to the image
+    #             image_path = os.path.abspath(os.path.join(self.config.images_dir, f"{name}.{self.config.ext[0]}"))
+    #             f.write(f"{i} {image_path}\n")
+    #         f.write("\n")
+
+    #         # Poses
+    #         f.write(f"POSES {n_images}\n")
+    #         for i, name in enumerate(sorted_names):
+    #             pose = self.camera_poses[name]
+    #             R = pose['R']
+    #             # MVS needs the camera center, which is -R.T @ t
+    #             t = pose['t']
+    #             camera_center = -R.T @ t
+                
+    #             f.write(f"{i} ")
+    #             f.write(" ".join(map(str, camera_center.flatten())) + " ")
+    #             f.write(" ".join(map(str, R.flatten())) + "\n")
+    #         f.write("\n")
+
+    #         # Intrinsics
+    #         f.write("INTRINSICS 1\n")
+    #         # Assuming a single camera calibration for all images
+    #         fx, fy = self.K[0, 0], self.K[1, 1]
+    #         cx, cy = self.K[0, 2], self.K[1, 2]
+            
+    #         # Load image size from calibration file
+    #         calib_path = self.config.get_calibration_path()
+    #         if os.path.exists(calib_path):
+    #             with open(calib_path, 'r') as calib_f:
+    #                 calib_data = json.load(calib_f)
+    #                 if 'image_size' in calib_data:
+    #                     img_size = calib_data['image_size']
+            
+    #         f.write(f"0 0 {img_size[0]} {img_size[1]} {fx} {fy} {cx} {cy} 0 0\n\n")
+
+    #         # Link cameras to intrinsics
+    #         f.write(f"IMAGES_INTRINSICS {n_images}\n")
+    #         for i in range(n_images):
+    #             f.write(f"{i} 0\n") # All images use intrinsic profile 0
+    #         f.write("\n")
+
+    #         # Sparse Point Cloud (optional but recommended)
+    #         f.write(f"POINTS {len(self.point_cloud)}\n")
+    #         for point in self.point_cloud:
+    #             f.write(" ".join(map(str, point)) + "\n")
+        
+    #     logging.info(f"✅ Scene saved to: {mvs_scene_path}")
+
+    # In reconstructor.py
+
+    # IMPORTANT: THIS IS A TEMPORARY DEBUGGING VERSION (v2)
+    def export_to_openmvs(self, mvs_scene_path: str):
+        """
+        Exports a MINIMAL, TWO-VIEW reconstruction with the simplest possible format.
+        """
+        logging.info("Exporting MINIMAL two-view reconstruction (simplified format)...")
+        os.makedirs(os.path.dirname(mvs_scene_path), exist_ok=True)
+
+        if len(self.camera_poses) < 2:
+            logging.error("Cannot create a two-view scene, not enough registered cameras.")
+            return
+
+        name1, name2 = self.baseline_cameras[0], self.baseline_cameras[1]
+        cameras_to_export = {
+            name1: self.camera_poses[name1],
+            name2: self.camera_poses[name2]
+        }
+        
+        points_to_write = []
+        for pt3d_idx, observations in self.point_map.items():
+            if name1 in observations and name2 in observations:
+                points_to_write.append(self.point_cloud[pt3d_idx])
+        
+        logging.info(f"Creating a minimal scene with 2 cameras and {len(points_to_write)} points.")
+
+        with open(mvs_scene_path, 'w') as f:
+            f.write("OPENMVS_SCENE\n")
+            f.write("# DEBUG: Minimal Two-View Scene (No Platforms)\n\n")
+
+            n_images = len(cameras_to_export)
+            f.write(f"IMAGES {n_images}\n")
+            sorted_names = sorted(list(cameras_to_export.keys()))
+            for i, name in enumerate(sorted_names):
+                image_path = os.path.abspath(os.path.join(self.config.images_dir, f"{name}.{self.config.ext[0]}"))
+                f.write(f"{i} {image_path}\n")
+            f.write("\n")
+
+            f.write(f"POSES {n_images}\n")
+            for i, name in enumerate(sorted_names):
+                pose = cameras_to_export[name]
+                R = pose['R']
+                t = pose['t']
+                camera_center = -R.T @ t
+                f.write(f"{i} {' '.join(map(str, camera_center.flatten()))} {' '.join(map(str, R.flatten()))}\n")
+            f.write("\n")
+
+            # --- Main Changes Are Here ---
+            # We removed the PLATFORMS section entirely.
+            # For INTRINSICS, the second number is the platform ID. We use -1 for no platform.
+            f.write("INTRINSICS 1\n")
+            fx, fy = self.K[0, 0], self.K[1, 1]
+            cx, cy = self.K[0, 2], self.K[1, 2]
+            img_size = self.image_size
+            f.write(f"0 -1 {img_size[0]} {img_size[1]} {fx} {fy} {cx} {cy} 0 0\n\n")
+
+            f.write(f"IMAGES_INTRINSICS {n_images}\n")
+            for i in range(n_images):
+                f.write(f"{i} 0\n")
+            f.write("\n")
+
+            f.write(f"POINTS {len(points_to_write)}\n")
+            for point in points_to_write:
+                f.write(" ".join(map(str, point)) + "\n")
+        
+        logging.info(f"✅ Minimal debug scene saved to: {mvs_scene_path}")
+    

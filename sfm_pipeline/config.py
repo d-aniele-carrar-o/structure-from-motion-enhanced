@@ -43,6 +43,7 @@ class Config:
     # --- Output & Visualization ---
     save_matches_vis: bool
     visualize_3d: bool
+    enable_bundle_adjustment: bool = False
 
     # --- Derived Paths (auto-generated) ---
     dataset_dir: str = field(init=False)
