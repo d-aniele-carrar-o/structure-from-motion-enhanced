@@ -68,10 +68,8 @@ class MediaProcessor:
             original_path = os.path.join(self.config.media_dir, video_file)
             if not self.camera_params:
                 self.camera_params = self._extract_camera_params_from_video(original_path)
-            processing_path = self._prepare_video_for_extraction(original_path)
-            if processing_path:
-                logging.info(f"Extracting frames from {os.path.basename(processing_path)}...")
-                self._extract_frames_from_video(processing_path)
+            logging.info(f"Extracting frames from {video_file}...")
+            self._extract_frames_from_video(original_path)
 
     def _copy_image_files(self, files: List[str]):
         logging.info(f"Copying {len(files)} existing image files...")
@@ -79,16 +77,7 @@ class MediaProcessor:
             copy2(os.path.join(self.config.media_dir, img_file), self.config.images_dir)
             logging.debug(f"Copied image: {img_file}")
 
-    def _prepare_video_for_extraction(self, original_path: str) -> Optional[str]:
-        video_file = os.path.basename(original_path)
-        dest_path = os.path.join(self.config.videos_dir, video_file)
-        try:
-            copy2(original_path, dest_path)
-            logging.debug(f"Copied video to processing directory: {video_file}")
-            return dest_path
-        except Exception as e:
-            logging.error(f"Failed to copy video file {video_file}: {e}")
-            return None
+
 
     def _extract_frames_from_video(self, video_path: str):
         cap = cv2.VideoCapture(video_path)

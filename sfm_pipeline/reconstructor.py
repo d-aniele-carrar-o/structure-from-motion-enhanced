@@ -76,13 +76,10 @@ class Reconstructor:
         else:
             logging.info("Bundle adjustment disabled (enable_bundle_adjustment=False).")
 
-        # 4. Save the final point cloud and show it (if requested)
+        # 4. Save the final point cloud
         if len(self.point_cloud) > 0:
-            output_path = os.path.join(self.config.results_dir, 'point_cloud.ply')
+            output_path = os.path.join(self.config.custom_sfm_dir, 'point_cloud.ply')
             self._save_point_cloud(output_path)
-            
-            if self.config.visualize_3d:
-                self._visualize_point_cloud()
 
     def _find_best_baseline_pair(self) -> Optional[Tuple[str, str, List[cv2.DMatch]]]:
         best_pair = (None, None, [])
@@ -562,30 +559,21 @@ class Reconstructor:
 
     # In reconstructor.py
 
-    # IMPORTANT: THIS IS A TEMPORARY DEBUGGING VERSION (v2)
     def export_to_openmvs(self, mvs_scene_path: str):
         """
-        Exports a MINIMAL, TWO-VIEW reconstruction with the simplest possible format.
+        Exports the full reconstruction to OpenMVS format.
         """
-        logging.info("Exporting MINIMAL two-view reconstruction (simplified format)...")
+        logging.info("Exporting full reconstruction to OpenMVS format...")
         os.makedirs(os.path.dirname(mvs_scene_path), exist_ok=True)
 
         if len(self.camera_poses) < 2:
-            logging.error("Cannot create a two-view scene, not enough registered cameras.")
+            logging.error("Cannot create scene, not enough registered cameras.")
             return
 
-        name1, name2 = self.baseline_cameras[0], self.baseline_cameras[1]
-        cameras_to_export = {
-            name1: self.camera_poses[name1],
-            name2: self.camera_poses[name2]
-        }
+        cameras_to_export = self.camera_poses
+        points_to_write = self.point_cloud
         
-        points_to_write = []
-        for pt3d_idx, observations in self.point_map.items():
-            if name1 in observations and name2 in observations:
-                points_to_write.append(self.point_cloud[pt3d_idx])
-        
-        logging.info(f"Creating a minimal scene with 2 cameras and {len(points_to_write)} points.")
+        logging.info(f"Creating scene with {len(cameras_to_export)} cameras and {len(points_to_write)} points.")
 
         with open(mvs_scene_path, 'w') as f:
             f.write("OPENMVS_SCENE\n")

@@ -7,8 +7,11 @@ Structure from Motion (SFM) from scratch, using Numpy and OpenCV with **iPhone m
 This repository provides:
 * **Complete SFM Pipeline** with iPhone HEIC/MOV support
 * **Automatic Camera Calibration** from HEIC metadata
-* **Unified Media Processing** (HEIC→JPG, MOV→MP4→frames)
-* Self-reliant SFM tutorials
+* **Optimized Media Processing** (HEIC→JPG, direct video frame extraction)
+* **Dual SfM Methods** (Custom implementation + COLMAP integration)
+* **Dense Reconstruction** (OpenMVS + COLMAP depth maps)
+* **Organized Output Structure** with clean file management
+* Self-reliant SfM tutorials
 * Interactive 3D visualization
 
 ## 🚀 Quick Start (iPhone Media)
@@ -36,14 +39,16 @@ data/
 ### 3. Run Complete Pipeline
 ```bash
 # Process media + run SFM + create 3D visualization
-python script/pipeline.py --dataset my_project --visualize-3d
+python main.py --dataset my_project --visualize-3d
 ```
 
 That's it! The pipeline automatically:
 - ✅ Converts HEIC→JPG with camera calibration extraction
-- ✅ Converts MOV→MP4 and extracts optimal frames
+- ✅ Extracts optimal frames directly from videos (no conversion needed)
 - ✅ Runs feature matching and SFM reconstruction
-- ✅ Creates interactive 3D point cloud visualization
+- ✅ Generates sparse and dense reconstructions
+- ✅ Creates organized output structure
+- ✅ Interactive 3D point cloud visualization
 
 ## 📱 iPhone Camera Setup
 
@@ -63,46 +68,63 @@ python script/media_manager.py --instructions
 The pipeline uses a clean, organized structure:
 ```
 data/
-  my_project/              # Your dataset name
+  my_project/
     media/                 # 📁 Raw iPhone files (.HEIC, .MOV)
-    images/                # ✅ Auto-generated processed images
-    videos/                # ✅ Auto-generated converted videos
-    features/              # ✅ Auto-generated feature files
-    matches/               # ✅ Auto-generated match files
 
 results/
-  my_project/              # SFM reconstruction results
-    point-clouds/          # 3D point cloud files (.ply)
-    errors/                # Reprojection error plots
-
-script/
-  calibrations/            # Camera calibration files
+  my_project/
+    ├── processing/        # 🔧 All intermediate processing files
+    │   ├── images/        # Processed images (HEIC→JPG, video frames)
+    │   ├── features/      # Feature extraction results
+    │   ├── matches/       # Feature matching results
+    │   ├── matches_vis/   # Match visualization images
+    │   └── calibrations/  # Camera calibration files
+    │
+    ├── custom_sfm/        # Your custom SfM implementation
+    │   ├── point_cloud.ply
+    │   └── scene.mvs
+    ├── colmap/            # COLMAP sparse reconstruction
+    │   ├── database.db
+    │   └── sparse/
+    ├── dense/             # Dense reconstruction outputs
+    │   └── colmap/        # COLMAP depth maps (.dmap files)
+    ├── mvs/               # OpenMVS dense reconstruction
+    │   ├── scene_dense.mvs
+    │   └── textured models
+    └── panorama/          # Panorama outputs
+        └── panorama.jpg
 ```
 
 ## 🛠️ Advanced Usage
 
+### SfM Method Selection
+```bash
+# Use custom SfM implementation (default)
+python main.py --dataset my_project --sfm-method custom
+
+# Use COLMAP for reconstruction
+python main.py --dataset my_project --sfm-method colmap
+```
+
 ### Custom Media Directory
 ```bash
 # Process media from custom location
-python script/pipeline.py --media-dir /path/to/iphone/export --dataset my_project
+python main.py --media-dir /path/to/iphone/export --dataset my_project
 ```
 
 ### Video Frame Extraction Settings
 ```bash
 # Extract more frames with higher quality threshold
-python script/pipeline.py --frame-interval 5 --max-frames 100 --quality-threshold 75
+python main.py --frame-interval 5 --max-frames 100 --quality-threshold 75
 ```
 
-### Individual Components
+### Visualization and Analysis
 ```bash
-# Process media only
-python script/media_manager.py /path/to/media --dataset my_project
-
-# Run SFM on existing processed images
-python script/pipeline.py --dataset my_project --visualize-3d
+# View all depth maps
+python view_all_dmaps.py results/my_project/dense/
 
 # Clean and restart
-python script/pipeline.py --dataset my_project --clean --visualize-3d
+python main.py --dataset my_project --clean --visualize-3d
 ```
 
 ## 📚 Tutorials
@@ -126,20 +148,26 @@ pip install pillow-heif
 # OR on macOS: uses built-in 'sips' command
 ```
 
-**For MOV conversion:**
+**For video processing and dense reconstruction:**
 ```bash
-# Install ffmpeg
+# Install ffmpeg (for video metadata extraction)
 brew install ffmpeg  # macOS
 # or apt install ffmpeg  # Linux
+
+# For dense reconstruction (optional)
+# Install COLMAP: https://colmap.github.io/install.html
+# Install OpenMVS: https://github.com/cdcseacave/openMVS
 ```
 
 ## 📊 Results
 
 The pipeline generates:
-- **3D Point Clouds** (.ply files) viewable in MeshLab
+- **Sparse Point Clouds** (.ply files) from both custom and COLMAP methods
+- **Dense Reconstructions** with OpenMVS integration
+- **Depth Maps** (.dmap files) for detailed surface analysis
 - **Interactive 3D Visualization** (matplotlib)
-- **Reprojection Error Analysis**
-- **Camera Pose Estimation**
+- **Panorama Stitching** from matched features
+- **Organized Output Structure** for easy analysis
 
 ### Sample Results
 ![](results/misc-figs/fountain_p11.png)
@@ -155,10 +183,13 @@ The pipeline generates:
 
 - **📱 iPhone Native Support**: Direct HEIC/MOV processing
 - **🔧 Automatic Calibration**: Extracts camera parameters from HEIC metadata
-- **🎬 Smart Frame Extraction**: Blur detection and optimal frame spacing
-- **🚀 One-Command Pipeline**: From raw media to 3D reconstruction
-- **📊 Interactive Visualization**: 3D point cloud viewer
-- **🧹 Clean Architecture**: Organized directory structure
+- **🎬 Optimized Frame Extraction**: Direct video processing with blur detection
+- **🔀 Dual SfM Methods**: Custom implementation + COLMAP integration
+- **🏗️ Dense Reconstruction**: OpenMVS + COLMAP depth map generation
+- **🚀 One-Command Pipeline**: From raw media to complete 3D reconstruction
+- **📊 Interactive Visualization**: 3D point cloud and depth map viewers
+- **🗂️ Organized Structure**: Clean, method-specific output organization
+- **🧹 Efficient Processing**: No unnecessary file conversions
 
 ## 🤝 Authors
 * [Muneeb Aadil](https://muneebaadil.github.io)

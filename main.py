@@ -75,11 +75,15 @@ def main():
     parser.add_argument('--pnp-prob', type=float, default=0.99,
                         help='Confidence level for PnP pose estimation (default: 0.99).')
 
+    # --- SfM Method Selection ---
+    parser.add_argument('--sfm-method', type=str, default='custom', choices=['custom', 'colmap'],
+                        help='SfM reconstruction method: custom (your implementation) or colmap (default: custom).')
+    
     # --- Output & Visualization ---
     parser.add_argument('--save-matches-vis', action='store_true', default=True,
                         help='Save images visualizing feature matches after geometric verification.')
     parser.add_argument('--visualize-3d', action='store_true', default=False,
-                        help='Display an interactive 3D visualization of the final point cloud.')
+                        help='Display interactive 3D visualization of sparse and dense point clouds.')
     parser.add_argument('--enable-bundle-adjustment', action='store_true', default=False,
                         help='Enable Bundle Adjustment optimization (slow but may improve accuracy).')
 
@@ -109,6 +113,7 @@ def main():
             max_features=args.max_features,
             ratio_threshold=args.ratio_threshold,
             # SFM
+            sfm_method=args.sfm_method,
             min_matches=args.min_matches,
             fund_method=_get_cv2_method(args.fund_method),
             outlier_threshold=args.outlier_threshold,
