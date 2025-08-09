@@ -9,6 +9,7 @@ from .config import Config
 from .media_processor import MediaProcessor
 from .feature_matcher import FeatureMatcher
 from .reconstructor import Reconstructor
+from .dimension_extractor import DimensionExtractor
 from . import utils
 
 
@@ -34,6 +35,7 @@ class Pipeline:
         self.media_processor = MediaProcessor(config)
         self.feature_matcher = FeatureMatcher(config)
         self.reconstructor = Reconstructor(config)
+        self.dimension_extractor = DimensionExtractor(config)
 
     def run(self):
         """Executes the SfM pipeline stages in sequence."""
@@ -94,7 +96,26 @@ class Pipeline:
         else:
             logging.info("Dense reconstruction currently only supported with COLMAP method. Use --sfm-method colmap to enable.")
 
-        # --- Stage 5: Panorama Creation ---
+        # --- Stage 5: Dimension Extraction (if enabled and HEIC files available) ---
+        if self.config.extract_dimensions:
+            heic_files = [f for f in os.listdir(self.config.media_dir) if f.lower().endswith('.heic')]
+            if heic_files:
+                logging.info("Starting furniture dimension extraction from HEIC files...")
+                dimensions_results = self.dimension_extractor.extract_dimensions(
+                    [os.path.join(self.config.media_dir, f) for f in heic_files]
+                )
+                if dimensions_results:
+                    logging.info(f"Extracted dimensions from {len(dimensions_results)} HEIC files")
+                    for filename, dims in dimensions_results.items():
+                        logging.info(f"  {os.path.basename(filename)}: {dims['width_m']}×{dims['height_m']}×{dims['depth_m']}m")
+                else:
+                    logging.warning("No dimensions could be extracted from HEIC files")
+            else:
+                logging.info("No HEIC files found, skipping dimension extraction")
+        else:
+            logging.info("Dimension extraction disabled")
+
+        # --- Stage 6: Panorama Creation ---
         logging.info("Creating panorama visualization...")
         self._create_panorama()
         logging.info("Panorama creation complete.")

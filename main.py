@@ -86,6 +86,8 @@ def main():
                         help='Display interactive 3D visualization of sparse and dense point clouds.')
     parser.add_argument('--enable-bundle-adjustment', action='store_true', default=False,
                         help='Enable Bundle Adjustment optimization (slow but may improve accuracy).')
+    parser.add_argument('--extract-dimensions', action='store_true', default=True,
+                        help='Extract furniture dimensions from iPhone HEIC files with LiDAR data (default: True).')
 
     try:
         args = parser.parse_args()
@@ -124,6 +126,7 @@ def main():
             save_matches_vis=args.save_matches_vis,
             visualize_3d=args.visualize_3d,
             enable_bundle_adjustment=args.enable_bundle_adjustment,
+            extract_dimensions=args.extract_dimensions,
         )
 
         logging.info("Configuration loaded. Starting SfM pipeline.")

@@ -7,6 +7,7 @@ Structure from Motion (SFM) from scratch, using Numpy and OpenCV with **iPhone m
 This repository provides:
 * **Complete SFM Pipeline** with iPhone HEIC/MOV support
 * **Automatic Camera Calibration** from HEIC metadata
+* **LiDAR Dimension Extraction** for furniture measurement (iPhone 15 Pro)
 * **Optimized Media Processing** (HEIC→JPG, direct video frame extraction)
 * **Dual SfM Methods** (Custom implementation + COLMAP integration)
 * **Dense Reconstruction** (OpenMVS + COLMAP depth maps)
@@ -32,14 +33,17 @@ data/
   my_project/
     media/           # 📁 PUT YOUR FILES HERE
       IMG_1234.MOV   # iPhone videos
-      IMG_1235.HEIC  # iPhone photos
+      IMG_1235.HEIC  # iPhone photos (with LiDAR depth for iPhone 15 Pro)
       ...
 ```
 
 ### 3. Run Complete Pipeline
 ```bash
-# Process media + run SFM + create 3D visualization
+# Process media + run SFM + create 3D visualization + extract dimensions
 python main.py --dataset my_project --visualize-3d
+
+# Extract only furniture dimensions from HEIC files
+python extract_dimensions.py --media-dir data/my_project/media
 ```
 
 That's it! The pipeline automatically:
@@ -47,6 +51,7 @@ That's it! The pipeline automatically:
 - ✅ Extracts optimal frames directly from videos (no conversion needed)
 - ✅ Runs feature matching and SFM reconstruction
 - ✅ Generates sparse and dense reconstructions
+- ✅ **Extracts furniture dimensions from iPhone 15 Pro LiDAR depth data**
 - ✅ Creates organized output structure
 - ✅ Interactive 3D point cloud visualization
 
@@ -78,7 +83,8 @@ results/
     │   ├── features/      # Feature extraction results
     │   ├── matches/       # Feature matching results
     │   ├── matches_vis/   # Match visualization images
-    │   └── calibrations/  # Camera calibration files
+    │   ├── calibrations/  # Camera calibration files
+    │   └── depth_maps/    # LiDAR depth visualizations
     │
     ├── custom_sfm/        # Your custom SfM implementation
     │   ├── point_cloud.ply
@@ -91,6 +97,9 @@ results/
     ├── mvs/               # OpenMVS dense reconstruction
     │   ├── scene_dense.mvs
     │   └── textured models
+    ├── dimensions/        # 📏 Furniture dimension extraction
+    │   ├── *_dimensions.json  # Dimension measurements
+    │   └── *_dimensions.jpg   # Visualization with measurements
     └── panorama/          # Panorama outputs
         └── panorama.jpg
 ```
@@ -110,6 +119,15 @@ python main.py --dataset my_project --sfm-method colmap
 ```bash
 # Process media from custom location
 python main.py --media-dir /path/to/iphone/export --dataset my_project
+```
+
+### Furniture Dimension Extraction
+```bash
+# Extract dimensions from iPhone 15 Pro HEIC files with LiDAR
+python extract_dimensions.py --media-dir data/my_project/media --debug
+
+# Disable dimension extraction in main pipeline
+python main.py --dataset my_project --no-extract-dimensions
 ```
 
 ### Video Frame Extraction Settings
@@ -183,6 +201,7 @@ The pipeline generates:
 
 - **📱 iPhone Native Support**: Direct HEIC/MOV processing
 - **🔧 Automatic Calibration**: Extracts camera parameters from HEIC metadata
+- **📏 LiDAR Dimension Extraction**: Real-world furniture measurements from iPhone 15 Pro depth data
 - **🎬 Optimized Frame Extraction**: Direct video processing with blur detection
 - **🔀 Dual SfM Methods**: Custom implementation + COLMAP integration
 - **🏗️ Dense Reconstruction**: OpenMVS + COLMAP depth map generation

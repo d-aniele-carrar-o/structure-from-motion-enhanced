@@ -45,6 +45,7 @@ class Config:
     save_matches_vis: bool
     visualize_3d: bool
     enable_bundle_adjustment: bool = False
+    extract_dimensions: bool = True
 
     # --- Derived Paths (auto-generated) ---
     dataset_dir: str = field(init=False)
@@ -64,6 +65,7 @@ class Config:
     custom_sfm_dir: str = field(init=False)
     mvs_dir: str = field(init=False)
     panorama_dir: str = field(init=False)
+    dimensions_dir: str = field(init=False)
 
     def __post_init__(self):
         """Generate derived paths and create directories."""
@@ -88,6 +90,7 @@ class Config:
         self.custom_sfm_dir = os.path.join(self.results_dir, 'custom_sfm')
         self.mvs_dir = os.path.join(self.results_dir, 'mvs')
         self.panorama_dir = os.path.join(self.results_dir, 'panorama')
+        self.dimensions_dir = os.path.join(self.results_dir, 'dimensions')
 
         # Create necessary directories
         os.makedirs(self.processing_dir, exist_ok=True)
@@ -103,6 +106,7 @@ class Config:
         os.makedirs(self.custom_sfm_dir, exist_ok=True)
         os.makedirs(self.mvs_dir, exist_ok=True)
         os.makedirs(self.panorama_dir, exist_ok=True)
+        os.makedirs(self.dimensions_dir, exist_ok=True)
 
     def get_calibration_path(self) -> str:
         """Returns the path to the camera calibration file."""
